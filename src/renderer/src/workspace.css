@@ -1,0 +1,11 @@
+.workspace-popover { margin:-16px 3px 12px; border:1px solid #35506c; background:#1b3048; border-radius:5px; overflow:hidden; }
+.workspace-popover button { display:block; width:100%; border:0; background:transparent; color:#dbe7f4; text-align:left; padding:8px 10px; font-size:12px; }
+.workspace-popover button:hover { background:#284665; }
+.recent-workspaces { width:min(620px,88vw); margin:0 auto 22px; text-align:left; border-top:1px solid #dce4ee; padding-top:16px; }
+.recent-workspaces h2 { margin:0 0 8px; font-size:13px; color:#52647c; }
+.recent-workspaces > div { display:flex; align-items:center; border:1px solid #dce4ee; background:#fff; margin-top:6px; border-radius:5px; overflow:hidden; }
+.recent-workspaces > div > button:first-child { flex:1; display:grid; grid-template-columns:20px minmax(0,1fr); align-items:center; gap:7px; border:0; background:#fff; text-align:left; padding:9px 10px; color:#30435c; }
+.recent-workspaces > div > button:first-child:hover { background:#f5f8fb; }
+.recent-workspaces span { font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.recent-workspaces small { grid-column:2; color:#8291a5; font-size:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.recent-workspaces > div > button:last-child { border:0; background:transparent; color:#8795a6; padding:8px; }
