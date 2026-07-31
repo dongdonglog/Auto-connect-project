@@ -27,13 +27,14 @@ export interface Material {
   hash: string | null
 }
 
-export interface Topic { id: string; name: string; description: string | null; createdAt: string }
+export interface Topic { id: string; name: string; description: string | null; createdAt: string; archivedAt: string | null; color: string }
 export interface Workstream { id: string; topicId: string; name: string; position: number; source: 'ai' | 'manual' }
 export interface Relation {
   id: string; sourceMaterialId: string; targetMaterialId: string; label: string; relationType: string
   evidenceText: string | null; evidenceMaterialId: string | null; confidence: number | null
-  createdBy: 'ai' | 'manual'; createdAt: string
+  createdBy: 'ai' | 'manual'; createdAt: string; lineColor?: string | null; sourceArrow?: boolean; sourceArrowStyle?: ArrowStyle; targetArrowStyle?: ArrowStyle; animated?: boolean; archived?: boolean; branchIndex?: number; lineKind?: 'auto' | 'straight' | 'bezier' | 'orthogonal'
 }
+export type ArrowStyle = 'none' | 'triangle' | 'open-triangle' | 'diamond'
 export interface Job { id: string; materialId: string; kind: string; status: JobStatus; error: string | null; updatedAt: string }
 export interface AnalysisSummary {
   topicId: string
@@ -77,7 +78,7 @@ export interface ProviderProfileInput {
 
 export interface TopicMap {
   topic: Topic
-  materials: Array<Material & { workstreamId: string | null }>
+  materials: Array<Material & { workstreamId: string | null; canvasX: number | null; canvasY: number | null; cardColor: string | null; cardTags: string[]; cardNote: string | null; sequence: number | null; sequenceSource: string }>
   workstreams: Workstream[]
   relations: Relation[]
 }

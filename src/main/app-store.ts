@@ -32,20 +32,13 @@ export class AppStore {
     return this.data().profiles.map(({ encryptedApiKey, ...profile }) => ({ ...profile, wireApi: profile.wireApi ?? 'chat_completions', hasApiKey: Boolean(encryptedApiKey) }))
   }
   getActiveConfig(): ProviderProfile | null {
-    const data = this.data()
-    // This release retires the legacy multi-profile screen at the user's request.
-    if (!data.profiles.some((profile) => profile.id === 'active') && data.profiles.length) { data.profiles = []; this.save(data) }
-    return this.getProfile('active')
+    return this.getProfile('active') ?? this.listProfiles()[0] ?? null
   }
   saveActiveConfig(input: Omit<ProviderProfileInput, 'id' | 'name'>): ProviderProfile {
-    const data = this.data()
-    // The simplified UI has exactly one active AI connection; legacy named entries are intentionally retired.
-    data.profiles = data.profiles.filter((profile) => profile.id === 'active')
-    this.save(data)
     return this.saveProfile({ ...input, id: 'active', name: 'Current AI configuration' })
   }
   clearLegacyConfigs(): void {
-    const data = this.data(); data.profiles = data.profiles.filter((profile) => profile.id === 'active'); this.save(data)
+    // Legacy callers remain safe; named profiles are now intentionally retained.
   }
   saveProfile(input: ProviderProfileInput): ProviderProfile {
     const data = this.data(); const existing = input.id ? data.profiles.find((profile) => profile.id === input.id) : undefined
@@ -67,6 +60,6 @@ export class AppStore {
     const { encryptedApiKey, ...publicProfile } = profile; return { ...publicProfile, wireApi: publicProfile.wireApi ?? 'chat_completions', hasApiKey: Boolean(encryptedApiKey) }
   }
   listRecent(): RecentWorkspace[] { return this.data().recentWorkspaces }
-  rememberWorkspace(root: string, name: string): void { const data = this.data(); data.recentWorkspaces = [{ root, name, openedAt: new Date().toISOString() }, ...data.recentWorkspaces.filter((item) => item.root !== root)].slice(0, 12); this.save(data) }
+  rememberWorkspace(root: string, name: string): void { const data = this.data(); data.recentWorkspaces = [{ root, name, openedAt: new Date().toISOString() }, ...data.recentWorkspaces.filter((item) => item.root !== root)].slice(0, 6); this.save(data) }
   forgetWorkspace(root: string): void { const data = this.data(); data.recentWorkspaces = data.recentWorkspaces.filter((item) => item.root !== root); this.save(data) }
 }

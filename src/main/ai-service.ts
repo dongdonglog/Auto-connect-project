@@ -1,11 +1,17 @@
-import type { AnalysisSummary, ModelSettings, ProviderProfile, TopicMap } from './types'
+import type { AnalysisSummary, ModelSettings, ProviderProfile, ProviderProfileInput, TopicMap } from './types'
 import { WorkspaceService } from './workspace-service'
 import { AppStore } from './app-store'
+import connectionSkill from './ai-skills/topic-connection.md?raw'
+import operationSkill from './ai-skills/topic-operation.md?raw'
 
 interface TopicAnalysisResult {
   workstreams: Array<{ name: string; materialIds: string[] }>
-  relations: Array<{ sourceMaterialId: string; targetMaterialId: string; label: string; evidence: string; confidence?: number }>
+  roots?: string[]
+  relations: Array<{ sourceMaterialId: string; targetMaterialId: string; relationType?: string; label?: string; evidence: string; confidence?: number }>
 }
+
+const workflowRelations: Record<string, string> = { next: '下一步', depends_on: '依赖', explains: '解释', evidences: '佐证', implements: '实现', tests: '验证', blocks: '阻塞', improves: '改进', reviews: '复盘', references: '参考', related: '关联' }
+export interface AiActionProposal { id: string; kind: 'create_relation' | 'delete_ai_relation' | 'rename_relation' | 'set_sequence' | 'set_card_style' | 'layout'; reason: string; evidence: string; materialId?: string; relationId?: string; payload?: Record<string, unknown> }
 
 export class AiService {
   private readonly topicRuns = new Map<string, Promise<AnalysisSummary>>()
@@ -44,13 +50,24 @@ export class AiService {
 
   async refreshModels(profileId: string): Promise<ProviderProfile> {
     const profile = this.appStore.getProfile(profileId); if (!profile) throw new Error('Model profile not found.')
-    // Responses-compatible gateways commonly do not expose /models. Keep the user-selected model.
-    if (profile.wireApi === 'responses') return profile
     const result = await this.readModels(profile, 12000)
     const activeProfile = result.baseUrl === profile.baseUrl ? profile : this.appStore.saveProfile({ id: profile.id, name: profile.name, provider: profile.provider, baseUrl: result.baseUrl, wireApi: profile.wireApi })
     const models = result.models
     const recommended = models.find((model) => /latest|gpt|claude|gemini|deepseek|grok|qwen|kimi|minimax|glm/i.test(model)) ?? models[0] ?? null
     return this.appStore.updateModels(activeProfile.id, models, recommended)
+  }
+
+  async saveProfileWithModels(input: ProviderProfileInput): Promise<ProviderProfile> {
+    const existing = input.id ? this.appStore.getProfile(input.id) : null
+    const profile = this.appStore.saveProfile(input)
+    try {
+      const discovered = await this.refreshModels(profile.id)
+      if (!discovered.recommendedModel) throw new Error('服务未返回可用的聊天模型。')
+      return discovered
+    } catch (error) {
+      if (!existing) this.appStore.deleteProfile(profile.id)
+      throw error
+    }
   }
 
   async analyze(topicId: string, materialId: string): Promise<AnalysisSummary> {
@@ -86,11 +103,16 @@ export class AiService {
         for (const materialId of proposed.materialIds) this.workspace.moveMaterial(topicId, materialId, stream.id)
       }
       const materialIds = new Set(map.materials.map((material) => material.id))
+      const aiParents = new Set<string>()
       for (const relation of result.relations) {
         if (!materialIds.has(relation.sourceMaterialId) || !materialIds.has(relation.targetMaterialId) || relation.sourceMaterialId === relation.targetMaterialId) continue
-        const label = relation.label.trim(); const evidence = relation.evidence.trim()
+        if (aiParents.has(relation.targetMaterialId)) continue
+        const relationType = relation.relationType && relation.relationType in workflowRelations ? relation.relationType : 'related'
+        const label = relationType === 'related' && relation.relationType === 'custom' && relation.label?.trim() ? relation.label.trim().slice(0, 32) : workflowRelations[relationType]
+        const evidence = relation.evidence.trim()
         if (!label || !evidence || this.workspace.hasRelation(relation.sourceMaterialId, relation.targetMaterialId, label)) continue
-        this.workspace.createRelation({ sourceMaterialId: relation.sourceMaterialId, targetMaterialId: relation.targetMaterialId, label, relationType: 'related', evidenceText: evidence, evidenceMaterialId: relation.sourceMaterialId, confidence: Number.isFinite(relation.confidence) ? relation.confidence ?? null : null, createdBy: 'ai' })
+        this.workspace.createRelation({ sourceMaterialId: relation.sourceMaterialId, targetMaterialId: relation.targetMaterialId, label, relationType, evidenceText: evidence, evidenceMaterialId: relation.sourceMaterialId, confidence: Number.isFinite(relation.confidence) ? relation.confidence ?? null : null, createdBy: 'ai' })
+        aiParents.add(relation.targetMaterialId)
         summary.addedRelations += 1
       }
       summary.processed = map.materials.length
@@ -116,9 +138,26 @@ export class AiService {
     return { answer: this.responseText(await this.responseJson(response, 'Question')) || 'The model returned no usable answer.', citations }
   }
 
+  async planTopicOperation(topicId: string, question: string): Promise<{ answer: string; proposedActions: AiActionProposal[] }> {
+    const map = this.workspace.topicMap(topicId)
+    if (!question.trim()) throw new Error('Describe the requested board change.')
+    const settings = this.workspace.getSettings()
+    if (!settings.enabled || !settings.chatModel) throw new Error('Enable a model before requesting board suggestions.')
+    if (settings.provider !== 'ollama' && !settings.allowCloud) throw new Error('Cloud analysis requires explicit consent in settings.')
+    const skill = this.readSkill('topic-operation.md')
+    const materials = map.materials.map((item) => ({ id: item.id, title: item.title, sequence: item.sequence, color: item.cardColor }))
+    const relations = map.relations.map((item) => ({ id: item.id, source: item.sourceMaterialId, target: item.targetMaterialId, label: item.label, createdBy: item.createdBy }))
+    const prompt = `${skill}\nActive topic: ${topicId}\nUser request: ${question}\nMaterials: ${JSON.stringify(materials)}\nRelations: ${JSON.stringify(relations)}\nReturn JSON only: {"answer":"short answer","proposedActions":[{"id":"local-id","kind":"allowed kind","reason":"why","evidence":"support","materialId":"optional","relationId":"optional","payload":{}}]}.`
+    const response = await this.chat(this.profileFor(settings), settings.chatModel, prompt, true)
+    if (!response.ok) throw new Error(`Board suggestion request returned HTTP ${response.status}.`)
+    const result = JSON.parse(this.responseText(await this.responseJson(response, 'Board suggestion'))) as { answer?: string; proposedActions?: AiActionProposal[] }
+    const actions = (result.proposedActions ?? []).filter((action) => this.validProposal(map, action)).slice(0, 8)
+    return { answer: result.answer?.trim() || '已根据当前主题生成可审阅的建议。', proposedActions: actions }
+  }
+
   private async requestTopic(settings: ModelSettings, map: TopicMap): Promise<TopicAnalysisResult> {
     const materials = map.materials.map((item) => ({ id: item.id, title: item.title, date: item.occurredAt ?? item.importedAt, text: (item.extractedText ?? item.excerpt ?? '').slice(0, 5000) }))
-    const prompt = `Organize one private workspace topic. Return ONLY valid JSON, no markdown. Schema: {"workstreams":[{"name":"short workstream name","materialIds":["id"]}],"relations":[{"sourceMaterialId":"id","targetMaterialId":"id","label":"short relation","evidence":"specific quoted or paraphrased supporting text","confidence":0.0}]}. Every input material ID MUST appear exactly once across workstreams. Use 2-6 meaningful workstreams when the material set permits; do not put all materials in one workstream unless they are genuinely one single task. Create relations only when evidence is explicit.\nExisting workstreams: ${JSON.stringify(map.workstreams.map((stream) => stream.name))}\nMaterials: ${JSON.stringify(materials)}`
+    const prompt = `${this.readSkill('topic-connection.md')}\nOrganize one private workspace topic. Return ONLY valid JSON, no markdown. Schema: {"workstreams":[{"name":"short workstream name","materialIds":["id"]}],"roots":["id"],"relations":[{"sourceMaterialId":"id","targetMaterialId":"id","relationType":"next|depends_on|explains|evidences|implements|tests|blocks|improves|reviews|references|related|custom","label":"only required for custom, concrete and short","evidence":"specific quoted or paraphrased supporting text","confidence":0.0}]}. Existing workstreams: ${JSON.stringify(map.workstreams.map((stream) => stream.name))}\nMaterials: ${JSON.stringify(materials)}`
     const response = await this.chat(this.profileFor(settings), settings.chatModel, prompt, true)
     if (!response.ok) throw new Error(`Analysis request returned HTTP ${response.status}.`)
     const content = this.responseText(await this.responseJson(response, 'Analysis'))
@@ -137,6 +176,24 @@ export class AiService {
     }
     if (assigned.size !== expected.size) throw new Error('Model did not assign every material to a workstream. The topic map was not changed.')
     if (!Array.isArray(result.relations)) result.relations = []
+    if (result.roots !== undefined && (!Array.isArray(result.roots) || result.roots.some((id) => !expected.has(id)))) throw new Error('Model output has invalid roots. The topic map was not changed.')
+    const parents = new Set<string>()
+    for (const relation of result.relations) {
+      if (!relation || !expected.has(relation.sourceMaterialId) || !expected.has(relation.targetMaterialId) || relation.sourceMaterialId === relation.targetMaterialId || typeof relation.evidence !== 'string') throw new Error('Model output has an invalid relation. The topic map was not changed.')
+      if (relation.relationType !== undefined && relation.relationType !== 'custom' && !(relation.relationType in workflowRelations)) relation.relationType = 'related'
+      if (parents.has(relation.targetMaterialId)) throw new Error('Model output assigns multiple parents. The topic map was not changed.')
+      parents.add(relation.targetMaterialId)
+    }
+  }
+  private readSkill(name: string): string { return name === 'topic-connection.md' ? connectionSkill : operationSkill }
+  private validProposal(map: TopicMap, action: AiActionProposal): boolean {
+    if (!action || !['create_relation', 'delete_ai_relation', 'rename_relation', 'set_sequence', 'set_card_style', 'layout'].includes(action.kind) || !action.reason || !action.evidence) return false
+    const materialIds = new Set(map.materials.map((item) => item.id)); const relation = action.relationId ? map.relations.find((item) => item.id === action.relationId) : undefined
+    if (action.materialId && !materialIds.has(action.materialId)) return false
+    if (action.kind === 'delete_ai_relation') return relation?.createdBy === 'ai'
+    if (action.kind === 'rename_relation') return Boolean(relation)
+    if (action.kind === 'create_relation') return typeof action.payload?.sourceMaterialId === 'string' && typeof action.payload?.targetMaterialId === 'string' && materialIds.has(String(action.payload.sourceMaterialId)) && materialIds.has(String(action.payload.targetMaterialId))
+    return true
   }
 
   private profileFor(settings: ModelSettings): ProviderProfile {
