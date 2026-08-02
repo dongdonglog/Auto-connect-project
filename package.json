@@ -9,6 +9,7 @@
     "package": "npm run build && electron-builder --win nsis portable",
     "preview": "electron-vite preview",
     "test": "vitest run",
+    "test:e2e": "npm run build && vitest run src/e2e",
     "test:watch": "vitest"
   },
   "dependencies": {
@@ -16,6 +17,7 @@
     "@vitejs/plugin-react": "^5.0.4",
     "@xyflow/react": "^12.11.2",
     "archiver": "latest",
+    "chokidar": "^5.0.0",
     "electron-vite": "latest",
     "highlight.js": "^11.11.1",
     "lucide-react": "latest",
@@ -29,7 +31,7 @@
     "rehype-raw": "^7.0.0",
     "rehype-sanitize": "^6.0.0",
     "remark-gfm": "^4.0.1",
-    "sql.js": "latest",
+    "sqlite-vec": "^0.1.9",
     "unzipper": "latest"
   },
   "devDependencies": {
@@ -39,10 +41,10 @@
     "@types/papaparse": "^5.5.2",
     "@types/react": "latest",
     "@types/react-dom": "latest",
-    "@types/sql.js": "latest",
     "@types/unzipper": "latest",
     "electron": "latest",
     "electron-builder": "^26.15.3",
+    "playwright": "^1.62.1",
     "typescript": "latest",
     "vite": "^7.3.6",
     "vitest": "latest"

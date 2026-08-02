@@ -5,11 +5,13 @@ import { AiService } from './ai-service'
 import type { ModelSettings, ProviderProfileInput } from './types'
 import { AppStore } from './app-store'
 import { resetLearningPathDemo } from './demo-service'
+import { TopicMcpServer } from './topic-mcp'
 
 let window: BrowserWindow | null = null
 const workspace = new WorkspaceService()
 let appStore: AppStore
 let ai: AiService
+const topicMcp = new TopicMcpServer((topicId) => workspace.topicMap(topicId))
 
 
 function createWindow(): void {
@@ -60,6 +62,13 @@ function registerIpc(): void {
   ipcMain.handle('materials:link', (_event, url: string) => workspace.createLink(url))
   ipcMain.handle('materials:retry', (_event, id: string) => workspace.retry(id))
   ipcMain.handle('materials:date', (_event, id: string, date: string) => workspace.updateMaterialDate(id, date))
+  ipcMain.handle('sources:list', () => workspace.listFolderSources())
+  ipcMain.handle('sources:add', (_event, input) => workspace.addFolderSource(input))
+  ipcMain.handle('sources:update', (_event, id: string, input) => workspace.updateFolderSource(id, input))
+  ipcMain.handle('sources:remove', (_event, id: string) => workspace.removeFolderSource(id))
+  ipcMain.handle('sources:rescan', (_event, id: string) => workspace.rescanFolderSource(id))
+  ipcMain.handle('sources:pause', (_event, id: string) => workspace.pauseFolderSource(id))
+  ipcMain.handle('sources:capability', () => workspace.indexCapability())
   ipcMain.handle('topics:list', () => workspace.listTopics())
   ipcMain.handle('topics:listArchived', () => workspace.listArchivedTopics())
   ipcMain.handle('topics:create', (_event, name: string, description: string) => workspace.createTopic(name, description))
@@ -71,8 +80,10 @@ function registerIpc(): void {
   ipcMain.handle('topics:restore', (_event, topicId: string) => workspace.restoreTopic(topicId))
   ipcMain.handle('topics:deleteArchived', (_event, topicId: string) => workspace.deleteArchivedTopic(topicId))
   ipcMain.handle('topics:map', (_event, topicId: string) => workspace.topicMap(topicId))
+  ipcMain.handle('topics:rebuildTopology', (_event, topicId: string) => workspace.rebuildSystemTopology(topicId))
   ipcMain.handle('analysis:topic', (_event, topicId: string) => ai.analyzeTopic(topicId))
   ipcMain.handle('analysis:status', (_event, topicId: string) => workspace.analysisStatus(topicId))
+  ipcMain.handle('analysis:run', (_event, topicId: string) => workspace.latestTopicAnalysisRun(topicId))
   ipcMain.handle('demo:create', () => resetLearningPathDemo(workspace))
   ipcMain.handle('workstreams:create', (_event, topicId: string, name: string) => workspace.createWorkstream(topicId, name))
   ipcMain.handle('workstreams:update', (_event, id: string, name: string) => workspace.updateWorkstream(id, name))
@@ -87,7 +98,7 @@ function registerIpc(): void {
   ipcMain.handle('relations:create', (_event, relation) => workspace.createRelation(relation))
   ipcMain.handle('relations:update', (_event, id: string, label: string) => workspace.updateRelation(id, label))
   ipcMain.handle('relations:delete', (_event, id: string) => workspace.deleteRelation(id))
-  ipcMain.handle('search', (_event, query: string) => workspace.search(query))
+  ipcMain.handle('search', (_event, query: string) => workspace.searchKnowledge(query))
   ipcMain.handle('clipboard:readText', () => clipboard.readText())
   ipcMain.handle('jobs:list', () => workspace.listJobs())
   ipcMain.handle('settings:get', () => workspace.getSettings())
@@ -107,6 +118,10 @@ function registerIpc(): void {
   ipcMain.handle('ai:analyze', (_event, topicId: string, materialId: string) => ai.analyze(topicId, materialId))
   ipcMain.handle('ai:ask', (_event, question: string) => ai.ask(question))
   ipcMain.handle('ai:planTopicOperation', (_event, topicId: string, question: string) => ai.planTopicOperation(topicId, question))
+  ipcMain.handle('topics:proposals', (_event, topicId: string) => workspace.listTopicProposals(topicId))
+  ipcMain.handle('topics:proposalStatus', (_event, proposalId: string, status: 'pending' | 'accepted' | 'archived') => workspace.updateTopicProposalStatus(proposalId, status))
+  ipcMain.handle('topic-tools:list', () => topicMcp.listTools())
+  ipcMain.handle('topic-tools:call', (_event, name: string, args: { topicId?: string; relations?: unknown; positions?: unknown; workstreams?: unknown }) => topicMcp.call(name, args))
 }
 
 function createMenu(): void {
@@ -124,4 +139,4 @@ function createMenu(): void {
 }
 
 app.whenReady().then(() => { appStore = new AppStore(app.getPath('userData'), safeStorage); ai = new AiService(workspace, appStore); registerIpc(); createMenu(); createWindow(); app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() }) })
-app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })
+app.on('window-all-closed', () => { workspace.close(); if (process.platform !== 'darwin') app.quit() })

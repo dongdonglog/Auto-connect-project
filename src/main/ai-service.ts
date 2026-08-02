@@ -1,21 +1,29 @@
-import type { AnalysisSummary, ModelSettings, ProviderProfile, ProviderProfileInput, TopicMap } from './types'
+import type { AnalysisSummary, GroundedAnswer, MaterialAnalysisCard, ModelSettings, ProviderProfile, ProviderProfileInput, TopicMap, TopicProposal, TopicRelationCandidate } from './types'
 import { WorkspaceService } from './workspace-service'
 import { AppStore } from './app-store'
 import connectionSkill from './ai-skills/topic-connection.md?raw'
 import operationSkill from './ai-skills/topic-operation.md?raw'
+import { topicToolContext } from './topic-tools'
+import { chunkHash } from './indexer'
 
 interface TopicAnalysisResult {
-  workstreams: Array<{ name: string; materialIds: string[] }>
+  workstreams?: Array<{ name: string; materialIds: string[] }>
   roots?: string[]
   relations: Array<{ sourceMaterialId: string; targetMaterialId: string; relationType?: string; label?: string; evidence: string; confidence?: number }>
 }
 
 const workflowRelations: Record<string, string> = { next: '下一步', depends_on: '依赖', explains: '解释', evidences: '佐证', implements: '实现', tests: '验证', blocks: '阻塞', improves: '改进', reviews: '复盘', references: '参考', related: '关联' }
-export interface AiActionProposal { id: string; kind: 'create_relation' | 'delete_ai_relation' | 'rename_relation' | 'set_sequence' | 'set_card_style' | 'layout'; reason: string; evidence: string; materialId?: string; relationId?: string; payload?: Record<string, unknown> }
+export interface AiActionProposal { id: string; kind: 'create_relation' | 'create_workstream' | 'delete_ai_relation' | 'rename_relation' | 'set_sequence' | 'set_card_style' | 'layout'; reason: string; evidence: string; materialId?: string; relationId?: string; payload?: Record<string, unknown> }
+
+function parseJsonObject(text: string): Record<string, unknown> {
+  const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim(); const start = cleaned.indexOf('{'); const end = cleaned.lastIndexOf('}')
+  if (start < 0 || end <= start) throw new Error('Model output did not contain a JSON object.')
+  return JSON.parse(cleaned.slice(start, end + 1)) as Record<string, unknown>
+}
 
 export class AiService {
   private readonly topicRuns = new Map<string, Promise<AnalysisSummary>>()
-  constructor(private readonly workspace: WorkspaceService, private readonly appStore: AppStore) {}
+  constructor(private readonly workspace: WorkspaceService, private readonly appStore: AppStore) { const target = this.workspace as unknown as { setEmbeddingProvider?: (provider: (texts: string[]) => Promise<number[][] | null>) => void }; target.setEmbeddingProvider?.((texts) => this.embed(texts)) }
 
   async testConnection(settings: ModelSettings): Promise<{ ok: boolean; message: string }> {
     try {
@@ -79,7 +87,7 @@ export class AiService {
   analyzeTopic(topicId: string): Promise<AnalysisSummary> {
     const active = this.topicRuns.get(topicId)
     if (active) return active
-    const run = this.runTopicAnalysis(topicId).finally(() => this.topicRuns.delete(topicId))
+    const run = this.runTopicAnalysisV2(topicId).finally(() => this.topicRuns.delete(topicId))
     this.topicRuns.set(topicId, run)
     return run
   }
@@ -95,14 +103,15 @@ export class AiService {
     try {
       const result = await this.requestTopic(settings, map)
       this.validateTopicResult(map, result)
-      let streams = this.workspace.topicMap(topicId).workstreams
-      for (const proposed of result.workstreams) {
-        const name = proposed.name.trim()
-        let stream = streams.find((item) => item.name === name)
-        if (!stream) { stream = this.workspace.createWorkstream(topicId, name, 'ai'); summary.addedWorkstreams += 1; streams = this.workspace.topicMap(topicId).workstreams }
-        for (const materialId of proposed.materialIds) this.workspace.moveMaterial(topicId, materialId, stream.id)
-      }
+      // The built-in connection analysis creates reversible AI-layer relations so
+      // the board changes immediately. Conversational operations remain proposals.
+      const proposedWorkstreams = (result.workstreams ?? []).filter((stream) => stream.name.trim())
+      summary.addedWorkstreams = proposedWorkstreams.length
       const materialIds = new Set(map.materials.map((material) => material.id))
+      for (const stream of proposedWorkstreams) {
+        const ids = stream.materialIds.filter((materialId) => materialIds.has(materialId))
+        if (ids.length) { const workstream = this.workspace.createWorkstream(topicId, stream.name.trim().slice(0, 80), 'ai'); ids.forEach((materialId) => this.workspace.moveMaterial(topicId, materialId, workstream.id)) }
+      }
       const aiParents = new Set<string>()
       for (const relation of result.relations) {
         if (!materialIds.has(relation.sourceMaterialId) || !materialIds.has(relation.targetMaterialId) || relation.sourceMaterialId === relation.targetMaterialId) continue
@@ -126,56 +135,161 @@ export class AiService {
     }
   }
 
-  async ask(question: string): Promise<{ answer: string; citations: Array<{ id: string; title: string }> }> {
-    const candidates = this.workspace.search(question).slice(0, 6)
-    const citations = candidates.map((material) => ({ id: material.id, title: material.title }))
+  async ask(question: string): Promise<GroundedAnswer> {
+    const retrieval = await this.workspace.searchKnowledgeAsync(question, { limit: 8 })
+    const hits = retrieval.hits
+    const citations = hits.map((hit) => ({ id: hit.materialId, materialId: hit.materialId, chunkId: hit.chunkId, title: hit.title, excerpt: hit.text.slice(0, 360), sourcePath: hit.sourcePath, pageNumber: hit.pageNumber, heading: hit.heading }))
     const settings = this.workspace.getSettings()
-    if (!settings.enabled || !settings.chatModel) return { answer: candidates.length ? `Found ${candidates.length} relevant local materials. Configure a model for cited answers.` : 'No local materials matched those keywords.', citations }
+    if (!hits.length) {
+      const pending = (this.workspace.listJobs?.() ?? []).some((job) => job.status === 'running' || job.status === 'queued')
+      return { answer: pending ? '材料仍在建立索引，请稍候再提问。' : '当前本地材料中没有找到足够证据。', citations, confidence: 'insufficient-evidence', retrievalMode: 'fallback' }
+    }
+    if (!settings.enabled || !settings.chatModel) return { answer: `找到 ${hits.length} 段相关本地材料。请在模型设置中启用问答以生成带引用的回答。`, citations, confidence: 'grounded', retrievalMode: retrieval.mode }
     if (settings.provider !== 'ollama' && !settings.allowCloud) throw new Error('Cloud question answering requires explicit consent in settings.')
-    const context = candidates.map((material) => `[${material.id}] ${material.title}\n${(material.extractedText ?? material.excerpt ?? '').slice(0, 2500)}`).join('\n\n')
-    const response = await this.chat(this.profileFor(settings), settings.chatModel, `Answer only from these local excerpts. Cite titles in square brackets.\n\nQuestion: ${question}\n\nMaterials:\n${context}`, false)
+    const context = hits.map((hit) => `[${hit.materialId}:${hit.chunkId}] ${hit.title}\n${hit.text}`).join('\n\n')
+    const response = await this.chat(this.profileFor(settings), settings.chatModel, `Answer only from these local excerpts. Cite the supplied material IDs in square brackets. If the excerpts do not support an answer, say that evidence is insufficient.\n\nQuestion: ${question}\n\nMaterials:\n${context}`, false)
     if (!response.ok) throw new Error(`Question request returned HTTP ${response.status}.`)
-    return { answer: this.responseText(await this.responseJson(response, 'Question')) || 'The model returned no usable answer.', citations }
+    const answer = this.responseText(await this.responseJson(response, 'Question')) || '模型没有返回可用回答。'
+    return { answer, citations, confidence: 'grounded', retrievalMode: retrieval.mode }
   }
 
-  async planTopicOperation(topicId: string, question: string): Promise<{ answer: string; proposedActions: AiActionProposal[] }> {
+  /** The board is changed only after every candidate has been evidence-checked. */
+  private async runTopicAnalysisV2(topicId: string): Promise<AnalysisSummary> {
+    const map = this.workspace.topicMap(topicId); const settings = this.workspace.getSettings()
+    if (!map.materials.length) throw new Error('Add materials to this topic before analysis.')
+    if (!settings.enabled || !settings.chatModel) throw new Error('Enable analysis and select a chat model in workspace settings first.')
+    if (settings.provider !== 'ollama' && !settings.allowCloud) throw new Error('Cloud analysis requires explicit consent in settings.')
+    const summary: AnalysisSummary = { topicId, processed: 0, addedWorkstreams: 0, addedRelations: 0, failures: [] }
+    const run = this.workspace.startTopicAnalysisRun(topicId, map.topic.revision, map.materials.length); summary.runId = run.id
+    const jobs = map.materials.map((material) => ({ materialId: material.id, jobId: this.workspace.startJob(material.id, 'ai-analysis') }))
+    try {
+      const cards = this.materialCards(map, settings.chatModel)
+      const candidateBatches = this.candidateBatches(cards)
+      this.workspace.updateTopicAnalysisRun(run.id, { stage: 'candidates', completed: 0, total: candidateBatches.length, summary: `Material cards ready: ${cards.length}.` })
+      const candidates = await this.requestTopicCandidates(settings, map, candidateBatches, (completed) => this.workspace.updateTopicAnalysisRun(run.id, { completed, total: candidateBatches.length }))
+      this.workspace.updateTopicAnalysisRun(run.id, { stage: 'verifying', completed: 0, total: candidates.length })
+      const verified: TopicRelationCandidate[] = []; let rejected = 0
+      // A small pool keeps cloud/local providers responsive without turning a
+      // large topic into thirty serialized network round trips.
+      for (let offset = 0; offset < candidates.length; offset += 3) {
+        const batch = await Promise.all(candidates.slice(offset, offset + 3).map((candidate) => this.verifyTopicCandidate(settings, map, candidate)))
+        for (const result of batch) { if (result) verified.push(result); else rejected += 1 }
+        this.workspace.updateTopicAnalysisRun(run.id, { completed: Math.min(offset + batch.length, candidates.length), rejectedCandidates: rejected })
+      }
+      this.workspace.updateTopicAnalysisRun(run.id, { stage: 'applying', completed: verified.length, total: verified.length, rejectedCandidates: rejected })
+      summary.addedRelations = this.workspace.applyTopicAnalysis(topicId, map.topic.revision, verified, this.topicPositions(map, verified)); summary.processed = map.materials.length
+      jobs.forEach((job) => this.workspace.finishJob(job.jobId))
+      this.workspace.updateTopicAnalysisRun(run.id, { stage: 'complete', completed: summary.processed, total: summary.processed, addedRelations: summary.addedRelations, rejectedCandidates: rejected, summary: summary.addedRelations ? `Created ${summary.addedRelations} evidence-backed AI relationships.` : 'No sufficiently supported relationships were found.' })
+      return summary
+    } catch (error) { const message = error instanceof Error ? error.message : 'Analysis failed.'; jobs.forEach((job) => this.workspace.failJob(job.jobId, message)); this.workspace.updateTopicAnalysisRun(run.id, { stage: 'failed', error: message }); throw error }
+  }
+
+  private async embed(texts: string[]): Promise<number[][] | null> {
+    const settings = this.workspace.getSettings(); if (!settings.embeddingModel) return null
+    if (settings.provider !== 'ollama' && !settings.allowCloud) return null
+    const profile = this.profileFor(settings); const base = profile.baseUrl.replace(/\/$/, ''); const headers = { 'Content-Type': 'application/json', ...this.headers(profile) }
+    if (profile.provider === 'ollama') {
+      const response = await fetch(`${base}/api/embed`, { method: 'POST', headers, body: JSON.stringify({ model: settings.embeddingModel, input: texts }) })
+      if (!response.ok) return null
+      const body = await response.json() as { embeddings?: number[][]; embedding?: number[] }
+      return body.embeddings ?? (body.embedding ? [body.embedding] : null)
+    }
+    if (profile.provider !== 'compatible') return null
+    const response = await fetch(`${base}/embeddings`, { method: 'POST', headers, body: JSON.stringify({ model: settings.embeddingModel, input: texts }) })
+    if (!response.ok) return null
+    const body = await response.json() as { data?: Array<{ embedding?: number[] }> }
+    return body.data?.map((item) => item.embedding ?? []).filter((item) => item.length > 0) ?? null
+  }
+
+  async planTopicOperation(topicId: string, question: string): Promise<{ answer: string; proposedActions: TopicProposal[] }> {
     const map = this.workspace.topicMap(topicId)
     if (!question.trim()) throw new Error('Describe the requested board change.')
     const settings = this.workspace.getSettings()
     if (!settings.enabled || !settings.chatModel) throw new Error('Enable a model before requesting board suggestions.')
     if (settings.provider !== 'ollama' && !settings.allowCloud) throw new Error('Cloud analysis requires explicit consent in settings.')
     const skill = this.readSkill('topic-operation.md')
-    const materials = map.materials.map((item) => ({ id: item.id, title: item.title, sequence: item.sequence, color: item.cardColor }))
-    const relations = map.relations.map((item) => ({ id: item.id, source: item.sourceMaterialId, target: item.targetMaterialId, label: item.label, createdBy: item.createdBy }))
-    const prompt = `${skill}\nActive topic: ${topicId}\nUser request: ${question}\nMaterials: ${JSON.stringify(materials)}\nRelations: ${JSON.stringify(relations)}\nReturn JSON only: {"answer":"short answer","proposedActions":[{"id":"local-id","kind":"allowed kind","reason":"why","evidence":"support","materialId":"optional","relationId":"optional","payload":{}}]}.`
+    const context = topicToolContext(map)
+    const prompt = `${skill}\nYou are calling the local topic tools. First inspect this context, then return ONLY JSON matching this schema: {"answer":"short answer","proposedActions":[{"id":"local-id","kind":"create_relation|create_workstream|delete_ai_relation|rename_relation|set_sequence|set_card_style|layout","reason":"why","evidence":"supporting text from context","materialId":"optional","relationId":"optional","payload":{}}]}. For a connection, payload MUST contain sourceMaterialId, targetMaterialId, label, relationType, confidence. Never return prose outside JSON.\nActive topic context: ${JSON.stringify(context)}\nUser request: ${question}`
     const response = await this.chat(this.profileFor(settings), settings.chatModel, prompt, true)
     if (!response.ok) throw new Error(`Board suggestion request returned HTTP ${response.status}.`)
-    const result = JSON.parse(this.responseText(await this.responseJson(response, 'Board suggestion'))) as { answer?: string; proposedActions?: AiActionProposal[] }
-    const actions = (result.proposedActions ?? []).filter((action) => this.validProposal(map, action)).slice(0, 8)
+    let result: { answer?: string; proposedActions?: AiActionProposal[] }
+    try { result = parseJsonObject(this.responseText(await this.responseJson(response, 'Board suggestion'))) as typeof result } catch {
+      const repair = await this.chat(this.profileFor(settings), settings.chatModel, `Repair the previous board suggestion into ONLY valid JSON using this schema: {"answer":"short answer","proposedActions":[]}. User request: ${question}. Do not include markdown or explanation.`, true)
+      if (!repair.ok) throw new Error(`Board suggestion returned invalid JSON (HTTP ${repair.status}).`)
+      result = parseJsonObject(this.responseText(await this.responseJson(repair, 'Board suggestion repair'))) as typeof result
+    }
+    if (!Array.isArray(result.proposedActions)) {
+      const repair = await this.chat(this.profileFor(settings), settings.chatModel, `The previous response did not contain proposedActions. Return ONLY JSON with at least one actionable proposal when evidence supports it. Schema: {"answer":"short answer","proposedActions":[{"id":"local-id","kind":"create_relation","reason":"why","evidence":"support","payload":{"sourceMaterialId":"id","targetMaterialId":"id","label":"short label","relationType":"next","confidence":0.8}}]}. User request: ${question}. Context: ${JSON.stringify(context)}`, true)
+      if (repair.ok) result = parseJsonObject(this.responseText(await this.responseJson(repair, 'Board suggestion repair'))) as typeof result
+    }
+    const validated = (result.proposedActions ?? []).filter((action) => this.validProposal(map, action)).slice(0, 8)
+    const actions = this.workspace.createTopicProposals(topicId, validated.map((action) => ({ kind: action.kind, reason: action.reason, evidence: action.evidence, materialId: action.materialId ?? null, relationId: action.relationId ?? null, payload: action.payload ?? {} })))
     return { answer: result.answer?.trim() || '已根据当前主题生成可审阅的建议。', proposedActions: actions }
   }
 
+  private materialCards(map: TopicMap, modelId: string): MaterialAnalysisCard[] {
+    return map.materials.map((material) => {
+      const cached = this.workspace.getMaterialAnalysisCard(material.id, modelId); if (cached) return cached
+      const chunks = this.workspace.listMaterialChunks(material.id); const headings = [...new Set(chunks.map((chunk) => chunk.heading).filter((heading): heading is string => Boolean(heading)))].slice(0, 6)
+      const keyChunks = chunks.slice(0, 3); const keywords = [...new Set(`${material.title} ${headings.join(' ')} ${keyChunks.map((chunk) => chunk.text.slice(0, 180)).join(' ')}`.match(/[\\p{L}\\p{N}_-]{2,}/gu) ?? [])].slice(0, 12)
+      const card: MaterialAnalysisCard = { materialId: material.id, contentHash: material.hash ?? chunkHash(material.extractedText ?? material.excerpt ?? material.title), modelId, title: material.title, date: material.occurredAt ?? material.importedAt, headings, keywords, evidenceChunkIds: keyChunks.map((chunk) => chunk.id), summary: [material.excerpt, headings.length ? `Sections: ${headings.join(' / ')}` : '', keywords.length ? `Keywords: ${keywords.join(', ')}` : ''].filter(Boolean).join('\\n').slice(0, 900), generatedAt: new Date().toISOString() }
+      this.workspace.saveMaterialAnalysisCard(card); return card
+    })
+  }
+  private candidateBatches(cards: MaterialAnalysisCard[]): MaterialAnalysisCard[][] {
+    const batches: MaterialAnalysisCard[][] = []
+    for (let offset = 0; offset < cards.length; offset += 6) {
+      const current = cards.slice(offset, offset + 6)
+      if (offset > 0 && cards[offset - 1]) current.unshift(cards[offset - 1])
+      batches.push(current)
+    }
+    return batches
+  }
+  private async requestTopicCandidates(settings: ModelSettings, map: TopicMap, batches: MaterialAnalysisCard[][], onBatchComplete: (completed: number) => void): Promise<TopicRelationCandidate[]> {
+    const raw: Array<Partial<TopicRelationCandidate>> = []
+    for (const [index, cards] of batches.entries()) {
+      const prompt = `${this.readSkill('topic-connection.md')}\\nCandidate batch ${index + 1}/${batches.length}: propose at most ${Math.min(10, Math.max(3, cards.length))} directed candidates from compact material cards. Do not force every material into a tree. Return ONLY JSON: {\"relations\":[{\"sourceMaterialId\":\"id\",\"targetMaterialId\":\"id\",\"relationType\":\"next|depends_on|explains|evidences|implements|tests|blocks|improves|reviews|references|related\",\"label\":\"short\",\"confidence\":0.0}]}. Cards: ${JSON.stringify(cards.map(({ materialId, title, date, headings, keywords, summary }) => ({ materialId, title, date, headings, keywords, summary })))} `
+      const response = await this.chat(this.profileFor(settings), settings.chatModel, prompt, true)
+      if (!response.ok) throw new Error(`Candidate batch ${index + 1}/${batches.length} returned HTTP ${response.status}.`)
+      const parsed = parseJsonObject(this.responseText(await this.responseJson(response, `Candidate batch ${index + 1}`))) as { relations?: Array<Partial<TopicRelationCandidate>> }
+      raw.push(...(parsed.relations ?? [])); onBatchComplete(index + 1)
+    }
+    const ids = new Set(map.materials.map((material) => material.id)); const seen = new Set<string>()
+    return raw.flatMap((relation) => { const source = String(relation.sourceMaterialId ?? ''); const target = String(relation.targetMaterialId ?? ''); const key = `${source}:${target}`; if (!ids.has(source) || !ids.has(target) || source === target || seen.has(key)) return []; seen.add(key); return [{ sourceMaterialId: source, targetMaterialId: target, relationType: typeof relation.relationType === 'string' && relation.relationType in workflowRelations ? relation.relationType : 'related', label: String(relation.label ?? '').slice(0, 48), confidence: Math.max(0, Math.min(1, Number(relation.confidence) || 0)), evidence: '', sourceChunkIds: [], targetChunkIds: [] }] }).slice(0, 30)
+  }
+  private async verifyTopicCandidate(settings: ModelSettings, map: TopicMap, candidate: TopicRelationCandidate): Promise<TopicRelationCandidate | null> {
+    const source = map.materials.find((material) => material.id === candidate.sourceMaterialId); const target = map.materials.find((material) => material.id === candidate.targetMaterialId); if (!source || !target) return null
+    const query = `${source.title} ${target.title}`; const left = this.workspace.materialEvidenceWindow(source.id, query); const right = this.workspace.materialEvidenceWindow(target.id, query); if (!left.length || !right.length) return null
+    const prompt = `Verify one proposed directed relation using only the evidence excerpts. Return ONLY JSON: {\"accept\":true,\"relationType\":\"next|depends_on|explains|evidences|implements|tests|blocks|improves|reviews|references|related\",\"label\":\"short\",\"confidence\":0.0,\"evidence\":\"specific support from both excerpts\"}. Or return {\"accept\":false}. Proposed: ${JSON.stringify(candidate)}. Source: ${JSON.stringify(left)}. Target: ${JSON.stringify(right)}`
+    const response = await this.chat(this.profileFor(settings), settings.chatModel, prompt, true); if (!response.ok) return null
+    try { const result = parseJsonObject(this.responseText(await this.responseJson(response, 'Relation verification'))) as { accept?: boolean; relationType?: string; label?: string; confidence?: number; evidence?: string }; if (!result.accept || !result.evidence?.trim()) return null; return { ...candidate, relationType: result.relationType && result.relationType in workflowRelations ? result.relationType : candidate.relationType, label: String(result.label ?? candidate.label ?? '').slice(0, 48), confidence: Math.max(0, Math.min(1, Number(result.confidence) || candidate.confidence)), evidence: result.evidence.trim().slice(0, 1600), sourceChunkIds: left.map((chunk) => chunk.id), targetChunkIds: right.map((chunk) => chunk.id) } } catch { return null }
+  }
+  private topicPositions(map: TopicMap, relations: TopicRelationCandidate[]): Array<{ materialId: string; x: number; y: number }> {
+    const depth = new Map(map.materials.map((material) => [material.id, 0])); for (let pass = 0; pass < map.materials.length; pass += 1) for (const relation of relations) depth.set(relation.targetMaterialId, Math.max(depth.get(relation.targetMaterialId) ?? 0, (depth.get(relation.sourceMaterialId) ?? 0) + 1))
+    const rows = new Map<number, number>(); return map.materials.map((material) => { if (material.canvasX !== null && material.canvasY !== null) return { materialId: material.id, x: material.canvasX, y: material.canvasY }; const column = depth.get(material.id) ?? 0; const row = rows.get(column) ?? 0; rows.set(column, row + 1); return { materialId: material.id, x: 120 + column * 300, y: 100 + row * 180 } })
+  }
   private async requestTopic(settings: ModelSettings, map: TopicMap): Promise<TopicAnalysisResult> {
-    const materials = map.materials.map((item) => ({ id: item.id, title: item.title, date: item.occurredAt ?? item.importedAt, text: (item.extractedText ?? item.excerpt ?? '').slice(0, 5000) }))
-    const prompt = `${this.readSkill('topic-connection.md')}\nOrganize one private workspace topic. Return ONLY valid JSON, no markdown. Schema: {"workstreams":[{"name":"short workstream name","materialIds":["id"]}],"roots":["id"],"relations":[{"sourceMaterialId":"id","targetMaterialId":"id","relationType":"next|depends_on|explains|evidences|implements|tests|blocks|improves|reviews|references|related|custom","label":"only required for custom, concrete and short","evidence":"specific quoted or paraphrased supporting text","confidence":0.0}]}. Existing workstreams: ${JSON.stringify(map.workstreams.map((stream) => stream.name))}\nMaterials: ${JSON.stringify(materials)}`
+    // Compatibility path: it uses the same cached cards as the primary
+    // orchestrator, never a fixed-length prefix of every original document.
+    const materials = this.materialCards(map, settings.chatModel).map((card) => ({ id: card.materialId, title: card.title, date: card.date, headings: card.headings, keywords: card.keywords, summary: card.summary }))
+    const prompt = `${this.readSkill('topic-connection.md')}\nConnect one private workspace topic. Return ONLY valid JSON, no markdown. Schema: {"relations":[{"sourceMaterialId":"id","targetMaterialId":"id","relationType":"next|depends_on|explains|evidences|implements|tests|blocks|improves|reviews|references|related|custom","label":"only required for custom, concrete and short","evidence":"specific quoted or paraphrased supporting text","confidence":0.0}],"workstreams":[{"name":"optional short group","materialIds":["id"]}]}. Workstreams are optional. Return only well-supported relations; do not assign every material. Existing workstreams: ${JSON.stringify(map.workstreams.map((stream) => stream.name))}\nMaterials: ${JSON.stringify(materials)}`
     const response = await this.chat(this.profileFor(settings), settings.chatModel, prompt, true)
     if (!response.ok) throw new Error(`Analysis request returned HTTP ${response.status}.`)
     const content = this.responseText(await this.responseJson(response, 'Analysis'))
-    try { return JSON.parse(content) as TopicAnalysisResult } catch { throw new Error('Model output failed JSON parsing. The topic map was not changed.') }
+    try { return parseJsonObject(content) as unknown as TopicAnalysisResult } catch { throw new Error('Model output failed JSON parsing. The topic map was not changed.') }
   }
 
   private validateTopicResult(map: TopicMap, result: TopicAnalysisResult): void {
-    if (!Array.isArray(result.workstreams) || !result.workstreams.length) throw new Error('Model output contains no workstreams. The topic map was not changed.')
+    if (!Array.isArray(result.relations)) result.relations = []
+    if (result.workstreams !== undefined && !Array.isArray(result.workstreams)) throw new Error('Model output has invalid workstreams.')
     const expected = new Set(map.materials.map((material) => material.id)); const assigned = new Set<string>()
-    for (const stream of result.workstreams) {
+    for (const stream of result.workstreams ?? []) {
       if (!stream || typeof stream.name !== 'string' || !stream.name.trim() || !Array.isArray(stream.materialIds)) throw new Error('Model output has an invalid workstream. The topic map was not changed.')
       for (const id of stream.materialIds) {
         if (!expected.has(id) || assigned.has(id)) throw new Error('Model output has an invalid or duplicate material assignment. The topic map was not changed.')
         assigned.add(id)
       }
     }
-    if (assigned.size !== expected.size) throw new Error('Model did not assign every material to a workstream. The topic map was not changed.')
-    if (!Array.isArray(result.relations)) result.relations = []
     if (result.roots !== undefined && (!Array.isArray(result.roots) || result.roots.some((id) => !expected.has(id)))) throw new Error('Model output has invalid roots. The topic map was not changed.')
     const parents = new Set<string>()
     for (const relation of result.relations) {
@@ -187,12 +301,14 @@ export class AiService {
   }
   private readSkill(name: string): string { return name === 'topic-connection.md' ? connectionSkill : operationSkill }
   private validProposal(map: TopicMap, action: AiActionProposal): boolean {
-    if (!action || !['create_relation', 'delete_ai_relation', 'rename_relation', 'set_sequence', 'set_card_style', 'layout'].includes(action.kind) || !action.reason || !action.evidence) return false
+    if (!action || !['create_relation', 'create_workstream', 'delete_ai_relation', 'rename_relation', 'set_sequence', 'set_card_style', 'layout'].includes(action.kind) || !action.reason || !action.evidence) return false
     const materialIds = new Set(map.materials.map((item) => item.id)); const relation = action.relationId ? map.relations.find((item) => item.id === action.relationId) : undefined
     if (action.materialId && !materialIds.has(action.materialId)) return false
     if (action.kind === 'delete_ai_relation') return relation?.createdBy === 'ai'
     if (action.kind === 'rename_relation') return Boolean(relation)
-    if (action.kind === 'create_relation') return typeof action.payload?.sourceMaterialId === 'string' && typeof action.payload?.targetMaterialId === 'string' && materialIds.has(String(action.payload.sourceMaterialId)) && materialIds.has(String(action.payload.targetMaterialId))
+    if (action.kind === 'create_relation') { const source = String(action.payload?.sourceMaterialId ?? ''); const target = String(action.payload?.targetMaterialId ?? ''); return materialIds.has(source) && materialIds.has(target) && source !== target && typeof action.payload?.label === 'string' && typeof action.payload?.relationType === 'string' && !map.relations.some((item) => item.sourceMaterialId === source && item.targetMaterialId === target) }
+    if (action.kind === 'create_workstream') return typeof action.payload?.name === 'string' && Array.isArray(action.payload?.materialIds) && (action.payload.materialIds as unknown[]).every((id) => materialIds.has(String(id)))
+    if (action.kind === 'layout') return Array.isArray(action.payload?.positions) && (action.payload.positions as unknown[]).every((position) => Boolean(position && typeof position === 'object' && materialIds.has(String((position as Record<string, unknown>).materialId)) && Number.isFinite(Number((position as Record<string, unknown>).x)) && Number.isFinite(Number((position as Record<string, unknown>).y))))
     return true
   }
 
@@ -228,11 +344,12 @@ export class AiService {
   }
   private async chat(profile: ProviderProfile, model: string, prompt: string, json: boolean): Promise<Response> {
     const base = profile.baseUrl.replace(/\/$/, ''); const headers = { 'Content-Type': 'application/json', ...this.headers(profile) }
-    if (profile.provider === 'ollama') return fetch(`${base}/api/generate`, { method: 'POST', headers, body: JSON.stringify({ model, prompt, stream: false, ...(json ? { format: 'json' } : {}) }) })
-    if (profile.provider === 'anthropic') return fetch(`${base}/messages`, { method: 'POST', headers, body: JSON.stringify({ model, max_tokens: 1600, messages: [{ role: 'user', content: prompt }] }) })
-    if (profile.provider === 'gemini') return fetch(`${base}/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(this.appStore.getApiKey(profile.id) ?? '')}`, { method: 'POST', headers, body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: json ? { responseMimeType: 'application/json' } : {} }) })
-    if (profile.wireApi === 'responses') return fetch(`${base}/responses`, { method: 'POST', headers, body: JSON.stringify({ model, input: prompt, store: false, ...(json ? { text: { format: { type: 'json_object' } } } : {}) }) })
-    return fetch(`${base}/chat/completions`, { method: 'POST', headers, body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], ...(json ? { response_format: { type: 'json_object' } } : {}) }) })
+    const signal = AbortSignal.timeout(90_000)
+    if (profile.provider === 'ollama') return fetch(`${base}/api/generate`, { method: 'POST', headers, signal, body: JSON.stringify({ model, prompt, stream: false, ...(json ? { format: 'json' } : {}) }) })
+    if (profile.provider === 'anthropic') return fetch(`${base}/messages`, { method: 'POST', headers, signal, body: JSON.stringify({ model, max_tokens: 1600, messages: [{ role: 'user', content: prompt }] }) })
+    if (profile.provider === 'gemini') return fetch(`${base}/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(this.appStore.getApiKey(profile.id) ?? '')}`, { method: 'POST', headers, signal, body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: json ? { responseMimeType: 'application/json' } : {} }) })
+    if (profile.wireApi === 'responses') return fetch(`${base}/responses`, { method: 'POST', headers, signal, body: JSON.stringify({ model, input: prompt, store: false, ...(json ? { text: { format: { type: 'json_object' } } } : {}) }) })
+    return fetch(`${base}/chat/completions`, { method: 'POST', headers, signal, body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], ...(json ? { response_format: { type: 'json_object' } } : {}) }) })
   }
   private responseText(body: Record<string, unknown>): string {
     const direct = typeof body.output_text === 'string' ? body.output_text : undefined

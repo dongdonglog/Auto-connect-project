@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 import mammoth from 'mammoth'
 import { PDFParse } from 'pdf-parse'
 
-export interface ExtractedMaterial { title: string; text: string; mimeType: string | null; occurredAt: string | null; occurredAtSource: 'content' | 'metadata' | 'import' }
+export interface ExtractedMaterial { title: string; text: string; mimeType: string | null; occurredAt: string | null; occurredAtSource: 'content' | 'metadata' | 'import'; pages?: Array<{ pageNumber: number; text: string }> }
 
 const textExtensions = new Set(['.txt', '.md', '.markdown', '.csv', '.json', '.html', '.htm', '.xml', '.yaml', '.yml'])
 const datePattern = /\b(20\d{2})[-/.](0?[1-9]|1[0-2])[-/.](0?[1-9]|[12]\d|3[01])\b/
@@ -20,6 +20,7 @@ export async function extractFile(filePath: string, suppliedData?: Buffer): Prom
   const data = suppliedData ?? await readFile(filePath)
   let text = ''
   let mimeType: string | null = null
+  let pages: Array<{ pageNumber: number; text: string }> | undefined
   if (textExtensions.has(extension)) {
     text = data.toString('utf8')
     mimeType = 'text/plain'
@@ -31,6 +32,7 @@ export async function extractFile(filePath: string, suppliedData?: Buffer): Prom
     const parser = new PDFParse({ data })
     const result = await parser.getText()
     text = result.text
+    pages = result.pages.map((page) => ({ pageNumber: page.num, text: page.text }))
     await parser.destroy()
     mimeType = 'application/pdf'
   } else if (['.png', '.jpg', '.jpeg', '.webp'].includes(extension)) {
@@ -40,7 +42,7 @@ export async function extractFile(filePath: string, suppliedData?: Buffer): Prom
     text = `Imported ${extension || 'file'} material. Content extraction is not available in this first release.`
   }
   const date = dateFromText(text)
-  return { title, text, mimeType, occurredAt: date, occurredAtSource: date ? 'content' : 'import' }
+  return { title, text, mimeType, occurredAt: date, occurredAtSource: date ? 'content' : 'import', pages }
 }
 
 export async function fetchLinkMetadata(url: string): Promise<{ title: string; siteName: string | null; excerpt: string }> {

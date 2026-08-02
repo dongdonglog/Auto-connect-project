@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { WorkspaceService } from './workspace-service'
+import { chunkHash } from './indexer'
 
 const roots: string[] = []
 const makeRoot = () => { const root = mkdtempSync(join(tmpdir(), 'material-map-')); roots.push(root); return root }
@@ -252,6 +253,10 @@ describe('WorkspaceService', () => {
     expect(service.listTopics()).toHaveLength(0)
     expect(service.listArchivedTopics()).toMatchObject([{ id: topic.id }])
     expect(service.getMaterial(material.id)).toMatchObject({ title: 'Keep me' })
+    const reopened = new WorkspaceService(); await reopened.open(service.summary().root)
+    expect(reopened.listTopics()).toHaveLength(0)
+    expect(reopened.listArchivedTopics()).toMatchObject([{ id: topic.id }])
+    reopened.close()
     await service.restoreTopic(topic.id)
     expect(service.topicMap(topic.id).materials[0]).toMatchObject({ id: material.id, canvasX: 320, canvasY: 180, cardColor: '#3568b8', cardTags: ['保留'] })
   })
@@ -277,6 +282,32 @@ describe('WorkspaceService', () => {
     expect(service.getMaterial(second.id)?.occurredAt).toBe(second.importedAt)
   })
 
+  it('builds a deterministic system next chain for numbered materials without AI', async () => {
+    const service = new WorkspaceService(); await service.create(makeRoot(), 'Research')
+    const materials = []
+    for (let index = 24; index >= 1; index -= 1) materials.push(await service.createNote(`${String(index).padStart(2, '0')}-Lesson`, `Step ${index}`))
+    const topic = service.createTopic('Course'); service.addMaterialsToTopic(topic.id, materials.map((material) => material.id))
+    const map = service.topicMap(topic.id)
+    const system = map.relations.filter((relation) => relation.createdBy === 'system')
+    expect(system).toHaveLength(23)
+    expect(system[0]).toMatchObject({ relationType: 'next', label: '\u4e0b\u4e00\u6b65' })
+    expect(map.materials.find((material) => material.id === system[0].sourceMaterialId)?.title).toBe('01-Lesson')
+    expect(map.materials.find((material) => material.id === system.at(-1)?.targetMaterialId)?.title).toBe('24-Lesson')
+    expect(map.materials.find((material) => material.title === '01-Lesson')).toMatchObject({ canvasX: 120, canvasY: 160, positionSource: 'auto' })
+  })
+
+  it('keeps a manual relationship and manual position when rebuilding the system topology', async () => {
+    const service = new WorkspaceService(); await service.create(makeRoot(), 'Research')
+    const first = await service.createNote('01-First', 'First'); const second = await service.createNote('02-Second', 'Second')
+    const topic = service.createTopic('Flow'); service.addToTopic(topic.id, first.id)
+    service.createRelation({ sourceMaterialId: first.id, targetMaterialId: second.id, label: 'Manual next', relationType: 'next', evidenceText: null, evidenceMaterialId: null, confidence: null, createdBy: 'manual' })
+    service.addToTopic(topic.id, second.id); service.positionMaterial(topic.id, first.id, 999, 333); service.rebuildSystemTopology(topic.id)
+    const map = service.topicMap(topic.id)
+    expect(map.relations.filter((relation) => relation.createdBy === 'manual')).toHaveLength(1)
+    expect(map.relations.filter((relation) => relation.createdBy === 'system')).toHaveLength(0)
+    expect(map.materials.find((material) => material.id === first.id)).toMatchObject({ canvasX: 999, canvasY: 333, positionSource: 'manual' })
+  })
+
   it('uses the most recently added real topic membership as the primary workbench topic', async () => {
     const service = new WorkspaceService(); await service.create(makeRoot(), 'Research')
     const material = await service.createNote('Shared', 'Reusable')
@@ -284,5 +315,92 @@ describe('WorkspaceService', () => {
     const newer = service.createTopic('Newer'); service.addToTopic(newer.id, material.id)
     expect(service.topicsForMaterial(material.id).map((topic) => topic.id)).toEqual([newer.id, older.id])
     expect(service.listMaterialsWithTopics().find((item) => item.id === material.id)?.topics[0]?.id).toBe(newer.id)
+  })
+
+  it('indexes a folder incrementally and preserves a missing source as unavailable', async () => {
+    const root = makeRoot(); const sourceRoot = join(root, 'knowledge'); mkdirSync(sourceRoot)
+    const filePath = join(sourceRoot, 'guide.md'); writeFileSync(filePath, '# Offline\nLocal search and citations.')
+    const service = new WorkspaceService(); await service.create(join(root, 'workspace'), 'Knowledge')
+    const source = await service.addFolderSource({ rootPath: sourceRoot, enabled: true, includePatterns: [], excludePatterns: [], watchEnabled: false })
+    await vi.waitFor(() => expect(service.listMaterials()).toHaveLength(1))
+    const material = service.listMaterials()[0]
+    await vi.waitFor(() => expect(service.getMaterial(material.id)?.status).toBe('complete'))
+    expect(service.searchKnowledge('citations')).toEqual(expect.arrayContaining([expect.objectContaining({ materialId: material.id, heading: 'Offline' })]))
+    writeFileSync(filePath, '# Offline\nUpdated local evidence.')
+    await service.rescanFolderSource(source.id)
+    await vi.waitFor(() => expect(service.getMaterial(material.id)?.extractedText).toContain('Updated local evidence'))
+    unlinkSync(filePath)
+    const result = await service.rescanFolderSource(source.id)
+    expect(result.unavailable).toBe(1)
+    expect(service.getMaterial(material.id)).toMatchObject({ availability: 'unavailable', extractedText: expect.stringContaining('Updated local evidence') })
+  })
+
+  it('creates stable text chunks for notes and returns paragraph-level search hits', async () => {
+    const service = new WorkspaceService(); await service.create(makeRoot(), 'Knowledge')
+    const material = await service.createNote('Architecture', '# Storage\n\nSQLite keeps the local index.\n\n# Retrieval\n\nCitations point back to source chunks.')
+    const chunks = service.listMaterialChunks(material.id)
+    expect(chunks.length).toBeGreaterThanOrEqual(2)
+    expect(chunks[0]).toMatchObject({ materialId: material.id, heading: 'Storage' })
+    expect(service.searchKnowledge('source chunks')).toEqual(expect.arrayContaining([expect.objectContaining({ materialId: material.id, chunkId: chunks.at(-1)?.id })]))
+  })
+
+  it('caches material analysis cards and expands evidence to neighboring chunks', async () => {
+    const service = new WorkspaceService(); await service.create(makeRoot(), 'Knowledge')
+    const material = await service.createNote('Architecture', '# Storage\n\nSQLite keeps the local index.\n\n# Retrieval\n\nEvidence windows include nearby chunks.')
+    const chunks = service.listMaterialChunks(material.id)
+    const card = { materialId: material.id, contentHash: material.hash ?? chunkHash(material.extractedText ?? material.excerpt ?? material.title), modelId: 'model-a', title: material.title, date: material.importedAt, headings: ['Storage'], keywords: ['SQLite'], evidenceChunkIds: [chunks[0].id], summary: 'Local storage.', generatedAt: new Date().toISOString() }
+    service.saveMaterialAnalysisCard(card)
+    expect(service.getMaterialAnalysisCard(material.id, 'model-a')).toMatchObject({ summary: 'Local storage.', headings: ['Storage'] })
+    expect(service.materialEvidenceWindow(material.id, 'retrieval evidence', 1).map((chunk) => chunk.id)).toContain(chunks.at(-1)?.id)
+  })
+
+  it('rejects an analysis commit after a topic revision changes', async () => {
+    const service = new WorkspaceService(); await service.create(makeRoot(), 'Knowledge')
+    const first = await service.createNote('First', 'First step')
+    const second = await service.createNote('Second', 'Second step')
+    const topic = service.createTopic('Flow'); service.addMaterialsToTopic(topic.id, [first.id, second.id])
+    const revision = service.topicMap(topic.id).topic.revision
+    service.positionMaterial(topic.id, first.id, 10, 10)
+    expect(() => service.applyTopicAnalysis(topic.id, revision, [{ sourceMaterialId: first.id, targetMaterialId: second.id, relationType: 'next', label: 'next', confidence: .9, evidence: 'Steps are ordered.', sourceChunkIds: [], targetChunkIds: [] }], [])).toThrow('topic changed')
+    expect(service.topicMap(topic.id).relations.filter((relation) => relation.createdBy === 'ai')).toHaveLength(0)
+  })
+
+  it('applies folder include and exclude patterns and pauses rescans', async () => {
+    const root = makeRoot(); const sourceRoot = join(root, 'knowledge'); mkdirSync(join(sourceRoot, 'drafts'), { recursive: true })
+    writeFileSync(join(sourceRoot, 'keep.md'), 'keep this')
+    writeFileSync(join(sourceRoot, 'skip.txt'), 'skip this')
+    writeFileSync(join(sourceRoot, 'drafts', 'nested.md'), 'skip nested')
+    const service = new WorkspaceService(); await service.create(join(root, 'workspace'), 'Knowledge')
+    const source = await service.addFolderSource({ rootPath: sourceRoot, enabled: true, includePatterns: ['**/*.md'], excludePatterns: ['drafts/**'], watchEnabled: false })
+    expect(service.listMaterials().map((material) => material.title)).toEqual(['keep'])
+    const paused = service.pauseFolderSource(source.id)
+    expect(paused.enabled).toBe(false)
+    expect(await service.rescanFolderSource(source.id)).toEqual({ scanned: 0, indexed: 0, unavailable: 0 })
+  })
+
+  it('persists topic proposals until the user accepts or archives them', async () => {
+    const service = new WorkspaceService(); await service.create(makeRoot(), 'Knowledge')
+    const topic = service.createTopic('Review')
+    const proposals = service.createTopicProposals(topic.id, [{ kind: 'create_relation', reason: 'The guide references the checklist.', evidence: 'Guide paragraph', materialId: null, relationId: null, payload: { label: 'references' } }])
+    expect(proposals).toHaveLength(1)
+    expect(service.listTopicProposals(topic.id)[0]).toMatchObject({ status: 'pending', payload: { label: 'references' } })
+    service.updateTopicProposalStatus(proposals[0].id, 'accepted')
+    expect(service.listTopicProposals(topic.id)).toHaveLength(0)
+    expect(service.listTopicProposals(topic.id, 'accepted')).toHaveLength(1)
+  })
+
+  it('requeues materials left running when a workspace is reopened', async () => {
+    const root = join(makeRoot(), 'workspace'); const service = new WorkspaceService(); await service.create(root, 'Recovery')
+    const note = await service.createNote('README', 'Local recovery test')
+    service.startJob(note.id, 'extract')
+    const reopened = new WorkspaceService(); await reopened.open(root)
+    await vi.waitFor(() => expect(reopened.listJobs().some((job) => job.materialId === note.id && job.status === 'complete')).toBe(true))
+  })
+
+  it('stores PDF page numbers on material chunks', async () => {
+    const service = new WorkspaceService(); await service.create(makeRoot(), 'PDF')
+    const material = await service.createNote('PDF', 'Page one\n\nPage two')
+    ;(service as unknown as { indexMaterialChunks(id: string, text: string, extracted: { pages: Array<{ pageNumber: number; text: string }> }): void }).indexMaterialChunks(material.id, 'Page one\n\nPage two', { pages: [{ pageNumber: 1, text: 'Page one' }, { pageNumber: 2, text: 'Page two' }] })
+    expect(service.listMaterialChunks(material.id).map((chunk) => chunk.pageNumber)).toEqual([1, 2])
   })
 })

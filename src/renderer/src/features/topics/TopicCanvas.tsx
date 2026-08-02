@@ -9,6 +9,7 @@ import { AiSuggestionPanel } from '../ai/AiSuggestionPanel'
 import { ipc } from '../../lib/ipc'
 import { useTopicConnections } from './useTopicConnections'
 import { DemoChecklist } from './DemoChecklist'
+import { stableTopicOrder } from '../../../../shared/topic-topology'
 
 type Menu = { x: number; y: number; position: { x: number; y: number }; nodeId?: string } | null
 const nodeTypes = { material: MaterialNode }
@@ -18,18 +19,13 @@ const isSame = (left: { x: number; y: number }, right: { x: number; y: number })
 
 /** React Flow container only: no page loading, dialogs, or unrelated application state. */
 export function TopicCanvas({ map, materials, onRefresh, onSelect, onImportFiles }: { map: TopicMap; materials: Material[]; onRefresh(): Promise<void>; onSelect(material: Material): void; onImportFiles(paths: string[], position: { x: number; y: number }): Promise<void> }): React.ReactElement {
-  const [tool, setTool] = useState<BoardTool>('select'); const [showAi, setShowAi] = useState(false); const [notice, setNotice] = useState(''); const [menu, setMenu] = useState<Menu>(null); const [pickerPosition, setPickerPosition] = useState<{ x: number; y: number } | null>(null); const [pickerQuery, setPickerQuery] = useState(''); const [pickedIds, setPickedIds] = useState<string[]>([]); const [undoPositions, setUndoPositions] = useState<Array<{ materialId: string; x: number; y: number }> | null>(null); const [redoPositions, setRedoPositions] = useState<Array<{ materialId: string; x: number; y: number }> | null>(null); const [flow, setFlow] = useState<ReactFlowInstance<Node<MaterialNodeData>, Edge> | null>(null)
+  const [tool, setTool] = useState<BoardTool>('select'); const [viewMode, setViewMode] = useState<'map' | 'flow'>('map'); const [showAi, setShowAi] = useState(false); const [notice, setNotice] = useState(''); const [menu, setMenu] = useState<Menu>(null); const [pickerPosition, setPickerPosition] = useState<{ x: number; y: number } | null>(null); const [pickerQuery, setPickerQuery] = useState(''); const [pickedIds, setPickedIds] = useState<string[]>([]); const [undoPositions, setUndoPositions] = useState<Array<{ materialId: string; x: number; y: number }> | null>(null); const [redoPositions, setRedoPositions] = useState<Array<{ materialId: string; x: number; y: number }> | null>(null); const [flow, setFlow] = useState<ReactFlowInstance<Node<MaterialNodeData>, Edge> | null>(null)
   const didFit = useRef(false)
   const [nodes, setNodes, onNodesChange] = useNodesState<Node<MaterialNodeData>>([]); const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([])
-  // Sequence is an explicit user override only. Imported cards otherwise stay
-  // deterministic by material date, then import date, then ID.
-  const ordered = useMemo(() => [...map.materials].sort((a, b) => {
-    const leftManual = a.sequenceSource === 'manual'; const rightManual = b.sequenceSource === 'manual'
-    if (leftManual && rightManual) return (a.sequence ?? Number.MAX_SAFE_INTEGER) - (b.sequence ?? Number.MAX_SAFE_INTEGER) || a.id.localeCompare(b.id)
-    if (leftManual !== rightManual) return leftManual ? -1 : 1
-    return (a.occurredAt ?? a.importedAt).localeCompare(b.occurredAt ?? b.importedAt) || a.importedAt.localeCompare(b.importedAt) || a.id.localeCompare(b.id)
-  }), [map.materials])
+  const ordered = useMemo(() => stableTopicOrder(map.materials.map((material) => ({ ...material, occurredAt: material.occurredAt ?? null, importedAt: material.importedAt ?? '', sequence: material.sequence ?? null, sequenceSource: material.sequenceSource ?? 'time', addedAt: material.addedAt ?? null }))), [map.materials])
   useEffect(() => { if (!notice) return; const timer = window.setTimeout(() => setNotice(''), 3000); return () => window.clearTimeout(timer) }, [notice])
+  useEffect(() => { const handler = (event: Event) => setViewMode((event as CustomEvent<'map' | 'flow'>).detail); window.addEventListener('material-map:view-mode', handler); return () => window.removeEventListener('material-map:view-mode', handler) }, [])
+  useEffect(() => { void window.materialMap.topicProposals?.list(map.topic.id).then((items: unknown[]) => { if (items.length) setShowAi(true) }).catch(() => undefined) }, [map.topic.id])
 
   // Merge server data by material id. Existing drag positions are authoritative
   // until the drag-end persistence call confirms them in the next map refresh.
@@ -42,14 +38,21 @@ export function TopicCanvas({ map, materials, onRefresh, onSelect, onImportFiles
   }, [ordered, tool, setNodes])
 
   useEffect(() => {
-    const visible = map.relations.filter((relation) => !relation.archived && (relation.createdBy !== 'ai' || showAi))
+    const visible = map.relations.filter((relation) => !relation.archived && (relation.createdBy !== 'ai' || showAi) && (viewMode === 'map' || ['next', 'depends_on', 'blocks', 'implements', 'tests'].includes(relation.relationType)))
     setEdges(visible.map((relation): Edge => ({ id: relation.id, source: relation.sourceMaterialId, target: relation.targetMaterialId, sourceHandle: 'out-right', targetHandle: 'in-left', type: 'relation', data: {
       relation,
       save: async (id: string, label: string) => { await ipc.relation.update(id, label); await onRefresh() },
       style: async (id: string, input: Record<string, unknown>) => { await ipc.topic.relationStyle(map.topic.id, id, input as never); await onRefresh() },
       remove: async (id: string) => { await ipc.relation.remove(id); await onRefresh() }
     } })))
-  }, [map.relations, showAi, map.topic.id, onRefresh, setEdges])
+  }, [map.relations, showAi, viewMode, map.topic.id, onRefresh, setEdges])
+
+  useEffect(() => {
+    if (viewMode !== 'flow') return
+    const flowEdges = edges.filter((edge) => map.relations.some((relation) => relation.id === edge.id && ['next', 'depends_on', 'blocks', 'implements', 'tests'].includes(relation.relationType)))
+    const positions = layoutTopic(nodes, flowEdges)
+    setNodes((current) => current.map((node) => { const next = positions.find((position) => position.materialId === node.id); return next ? { ...node, position: { x: next.x, y: next.y } } : node }))
+  }, [viewMode])
 
   const { validate: validConnection, create: connect } = useTopicConnections(map.relations, onRefresh, setNotice)
   const addCard = async (position: { x: number; y: number }): Promise<void> => {
@@ -62,7 +65,7 @@ export function TopicCanvas({ map, materials, onRefresh, onSelect, onImportFiles
   }
   const addExisting = async (): Promise<void> => {
     if (!pickerPosition || !pickedIds.length) return
-    for (const [index, id] of pickedIds.entries()) { await ipc.topic.addMaterial(map.topic.id, id); await ipc.topic.position(map.topic.id, id, pickerPosition.x + (index % 3) * 32, pickerPosition.y + Math.floor(index / 3) * 32) }
+    await window.materialMap.topics.addMaterials(map.topic.id, pickedIds)
     setPickerPosition(null); setPickedIds([]); setPickerQuery(''); await onRefresh(); setNotice(`已加入 ${pickedIds.length} 份工作台材料。`)
   }
   const positions = (): Array<{ materialId: string; x: number; y: number }> => nodes.map((node) => ({ materialId: node.id, x: node.position.x, y: node.position.y }))
