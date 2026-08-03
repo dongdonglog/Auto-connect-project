@@ -17,4 +17,18 @@ describe('WorkspaceService scale smoke', () => {
       expect(service.listArchivedTopics()).toMatchObject([{ id: topic.id }])
     } finally { rmSync(root, { recursive: true, force: true }) }
   }, 60_000)
+
+  it('serves material relations for a fifty-document workspace within one second', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'material-map-relations-'))
+    try {
+      const service = new WorkspaceService(); await service.create(join(root, 'workspace'), 'Relations')
+      const materials = []
+      for (let index = 0; index < 50; index += 1) materials.push(await service.createDocument(`doc-${index}.md`, `# Document ${index}\n${index ? `See [previous](doc-${index - 1}.md).` : 'SQLite local storage.'}\nSQLite relation evidence.`, 'md'))
+      const started = performance.now()
+      const relations = materials.flatMap((material) => service.listMaterialRelations(material.id, 5))
+      const elapsed = performance.now() - started
+      expect(relations.length).toBeGreaterThan(40)
+      expect(elapsed).toBeLessThan(1_000)
+    } finally { rmSync(root, { recursive: true, force: true }) }
+  }, 60_000)
 })

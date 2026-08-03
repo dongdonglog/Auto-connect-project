@@ -9,3 +9,4 @@ docs/
 *.material-workspace
 workspace.sqlite
 workspace.sqlite.enc
+.workbuddy

@@ -31,7 +31,7 @@ describe('Electron packaged shell', () => {
         const map = await api.topics.map(topic.id)
         return { materials: materials.length, hits: hits.length, systemRelations: map.relations.filter((relation: { createdBy: string }) => relation.createdBy === 'system').length, first: map.relations.find((relation: { createdBy: string }) => relation.createdBy === 'system')?.label }
       }, workspaceRoot)
-      expect(result).toEqual({ materials: 2, hits: 2, systemRelations: 1, first: '\u4e0b\u4e00\u6b65' })
+    expect(result).toEqual({ materials: 2, hits: 2, systemRelations: 0, first: undefined })
     } finally {
       await app?.close()
       app = null

@@ -10,6 +10,91 @@ const makeRoot = () => { const root = mkdtempSync(join(tmpdir(), 'material-map-'
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
 
 describe('WorkspaceService', () => {
+  it('builds explainable material relations from explicit references and shared technical entities', async () => {
+    const service = new WorkspaceService(); await service.create(makeRoot(), 'Explorer')
+    const referenced = await service.createDocument('details.md', '# Redis details\nRedis persistence and cache policy.', 'md')
+    const source = await service.createDocument('overview.md', '# Overview\nRead [details](details.md). Redis is used for cache policy.', 'md')
+    const relations = service.listMaterialRelations(source.id)
+    expect(relations).toEqual(expect.arrayContaining([expect.objectContaining({ target: expect.objectContaining({ id: referenced.id }), relationType: 'references' })]))
+    const relation = relations.find((item) => item.target.id === referenced.id)!
+    expect(relation.evidence).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'explicit_reference', text: expect.stringContaining('引用了') })]))
+    service.updateMaterialRelationStatus(relation.id, 'hidden')
+    expect(service.listMaterialRelations(source.id)).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: relation.id })]))
+    service.updateMaterialRelationStatus(relation.id, 'visible')
+    const fixed = service.fixMaterialRelation(relation.id)
+    expect(fixed.createdBy).toBe('manual')
+    expect(service.listMaterialRelations(source.id).find((item) => item.id === relation.id)?.status).toBe('fixed')
+  })
+
+  it('resolves relative file references with their source offset and preserves status after reindexing', async () => {
+    const root = makeRoot(); const files = join(root, 'files'); const docs = join(files, 'docs')
+    mkdirSync(docs, { recursive: true })
+    const targetPath = join(docs, 'details.md'); const sourcePath = join(files, 'overview.md')
+    writeFileSync(targetPath, '# Details\nSQLite persistence details.')
+    const sourceText = '# Overview\nRead [details](./docs/details.md) before implementation.'
+    writeFileSync(sourcePath, sourceText)
+    const service = new WorkspaceService(); await service.create(join(root, 'workspace'), 'Explorer')
+    const folder = await service.addFolderSource({ rootPath: files, enabled: true, includePatterns: [], excludePatterns: [], watchEnabled: false })
+    await vi.waitFor(() => expect(service.listMaterials().every((material) => material.status === 'complete')).toBe(true))
+    const target = service.listMaterials().find((material) => material.sourcePath === targetPath)!
+    const source = service.listMaterials().find((material) => material.sourcePath === sourcePath)!
+    const relation = service.listMaterialRelations(source.id).find((item) => item.target.id === target.id)!
+    const evidence = relation.evidence.find((item) => item.type === 'explicit_reference')!
+    expect(evidence).toMatchObject({ sourceMaterialId: source.id, targetMaterialId: target.id, sourceOffset: sourceText.indexOf('./docs/details.md') })
+    expect(evidence.text).toContain('docs/details.md')
+
+    service.updateMaterialRelationStatus(relation.id, 'hidden')
+    writeFileSync(sourcePath, `${sourceText}\nSQLite is local.`)
+    await service.rescanFolderSource(folder.id)
+    await vi.waitFor(() => expect(service.getMaterial(source.id)?.extractedText).toContain('SQLite is local.'))
+    service.updateMaterialRelationStatus(relation.id, 'visible')
+    expect(service.listMaterialRelations(source.id).find((item) => item.id === relation.id)?.status).toBe('visible')
+
+    service.fixMaterialRelation(relation.id)
+    writeFileSync(sourcePath, `${sourceText}\nSQLite remains local.`)
+    await service.rescanFolderSource(folder.id)
+    await vi.waitFor(() => expect(service.getMaterial(source.id)?.extractedText).toContain('SQLite remains local.'))
+    expect(service.listMaterialRelations(source.id).find((item) => item.id === relation.id)?.status).toBe('fixed')
+  })
+
+  it('fixes a material relation into the selected topic with both materials', async () => {
+    const service = new WorkspaceService(); await service.create(makeRoot(), 'Explorer')
+    const details = await service.createDocument('details.md', '# Details\nSQLite persistence details.', 'md')
+    const overview = await service.createDocument('overview.md', '# Overview\nRead [details](details.md).', 'md')
+    const relation = service.listMaterialRelations(overview.id).find((item) => item.target.id === details.id)!
+    const topic = service.createTopic('Storage')
+    const fixed = service.fixMaterialRelation(relation.id, topic.id)
+    expect(fixed.createdBy).toBe('manual')
+    expect(service.topicMap(topic.id)).toMatchObject({ materials: expect.arrayContaining([expect.objectContaining({ id: overview.id }), expect.objectContaining({ id: details.id })]), relations: expect.arrayContaining([expect.objectContaining({ id: fixed.id })]) })
+    expect(service.listMaterialRelations(overview.id).find((item) => item.id === relation.id)?.status).toBe('fixed')
+  })
+
+  it('restores material relation evidence with a workspace package', async () => {
+    const root = makeRoot(); const source = join(root, 'source-workspace'); const destination = join(root, 'imported-workspace'); const packagePath = join(root, 'relations.material-workspace')
+    const service = new WorkspaceService(); await service.create(source, 'Explorer')
+    const target = await service.createDocument('target.md', '# Target\nSQLite basics.', 'md')
+    const material = await service.createDocument('source.md', '# Source\nSee target.md for SQLite basics.', 'md')
+    const relation = service.listMaterialRelations(material.id).find((item) => item.target.id === target.id)!
+    service.fixMaterialRelation(relation.id)
+    await service.exportPackage(packagePath)
+    const restored = new WorkspaceService(); await restored.importPackage(packagePath, destination)
+    expect(restored.listMaterialRelations(material.id).find((item) => item.target.id === target.id)).toMatchObject({ status: 'fixed', evidence: expect.any(Array) })
+  })
+
+  it('does not rebuild complete material relations each time a workspace opens', async () => {
+    const root = join(makeRoot(), 'workspace')
+    const service = new WorkspaceService(); await service.create(root, 'Explorer')
+    await service.createDocument('details.md', '# Details\nSQLite.', 'md')
+    await service.createDocument('overview.md', '# Overview\nSee details.md.', 'md')
+    service.close()
+
+    const reopened = new WorkspaceService()
+    const rebuild = vi.spyOn(reopened as never, 'rebuildMaterialRelations')
+    await reopened.open(root)
+    expect(rebuild).not.toHaveBeenCalled()
+    reopened.close()
+  })
+
   it('stores notes, topics, workstreams, and editable relations locally', async () => {
     const service = new WorkspaceService()
     await service.create(makeRoot(), 'Research')
@@ -282,18 +367,15 @@ describe('WorkspaceService', () => {
     expect(service.getMaterial(second.id)?.occurredAt).toBe(second.importedAt)
   })
 
-  it('builds a deterministic system next chain for numbered materials without AI', async () => {
+  it('does not invent system relationships for numbered materials without AI', async () => {
     const service = new WorkspaceService(); await service.create(makeRoot(), 'Research')
     const materials = []
     for (let index = 24; index >= 1; index -= 1) materials.push(await service.createNote(`${String(index).padStart(2, '0')}-Lesson`, `Step ${index}`))
     const topic = service.createTopic('Course'); service.addMaterialsToTopic(topic.id, materials.map((material) => material.id))
     const map = service.topicMap(topic.id)
     const system = map.relations.filter((relation) => relation.createdBy === 'system')
-    expect(system).toHaveLength(23)
-    expect(system[0]).toMatchObject({ relationType: 'next', label: '\u4e0b\u4e00\u6b65' })
-    expect(map.materials.find((material) => material.id === system[0].sourceMaterialId)?.title).toBe('01-Lesson')
-    expect(map.materials.find((material) => material.id === system.at(-1)?.targetMaterialId)?.title).toBe('24-Lesson')
-    expect(map.materials.find((material) => material.title === '01-Lesson')).toMatchObject({ canvasX: 120, canvasY: 160, positionSource: 'auto' })
+    expect(system).toHaveLength(0)
+    expect(map.materials.find((material) => material.title === '01-Lesson')).toMatchObject({ canvasX: 120, canvasY: 120, positionSource: 'auto' })
   })
 
   it('keeps a manual relationship and manual position when rebuilding the system topology', async () => {
@@ -306,6 +388,20 @@ describe('WorkspaceService', () => {
     expect(map.relations.filter((relation) => relation.createdBy === 'manual')).toHaveLength(1)
     expect(map.relations.filter((relation) => relation.createdBy === 'system')).toHaveLength(0)
     expect(map.materials.find((material) => material.id === first.id)).toMatchObject({ canvasX: 999, canvasY: 333, positionSource: 'manual' })
+  })
+
+  it('extracts local tags and persists bounded topic relationship candidates', async () => {
+    const service = new WorkspaceService(); await service.create(makeRoot(), 'Research')
+    const first = await service.createDocument('Go HTTP 服务', '# HTTP 服务\n使用 Go 编写用户服务和 HTTP API。', 'md')
+    const second = await service.createDocument('Go API 测试', '# HTTP API 测试\n为 Go 用户服务编写接口测试。', 'md')
+    const third = await service.createDocument('数据库设计', '# MySQL\n设计数据库索引。', 'md')
+    expect(service.listMaterialTags(first.id).map((tag) => tag.tag)).toContain('HTTP 服务')
+    const topic = service.createTopic('Backend'); service.addMaterialsToTopic(topic.id, [first.id, second.id, third.id])
+    const candidates = service.listTopicCandidates(topic.id)
+    expect(candidates.some((candidate) => [candidate.sourceMaterialId, candidate.targetMaterialId].includes(first.id) && [candidate.sourceMaterialId, candidate.targetMaterialId].includes(second.id))).toBe(true)
+    expect(candidates.every((candidate) => candidate.sharedTags.length > 0)).toBe(true)
+    service.updateCandidateStatus(topic.id, candidates[0].id, 'hidden')
+    expect(service.listTopicCandidates(topic.id).find((candidate) => candidate.id === candidates[0].id)?.status).toBe('hidden')
   })
 
   it('uses the most recently added real topic membership as the primary workbench topic', async () => {

@@ -1,164 +1,397 @@
-import React, { useEffect, useMemo, useState } from 'react'
-import { Background, Controls, Handle, Position, ReactFlow, type Connection, type Edge, type Node, type NodeProps, type ReactFlowInstance } from '@xyflow/react'
-import '@xyflow/react/dist/style.css'
-import { Archive, ArrowLeft, Bot, CheckCircle2, ChevronRight, CircleAlert, Clock3, FilePlus2, FileText, FolderOpen, Hand, Link2, LoaderCircle, LocateFixed, Map, Maximize2, MousePointer2, Network, Pencil, Plus, Redo2, Search, Settings2, Sparkles, Trash2, Undo2, Upload, X } from 'lucide-react'
-import type { AnalysisStatus, AnalysisSummary, GroundedAnswer, Material, ModelSettings, ProviderProfile, Relation, Topic, TopicMap, Workspace } from './types'
+import React, { useEffect, useState } from 'react'
+import { Archive, ArrowLeft, Bot, FileText, Plus, Search, Upload, X } from 'lucide-react'
+import type { GroundedAnswer, Material, Topic, TopicMap, Workspace } from './types'
 import { syncImportNotices, type ImportNotice } from './import-state'
-import { TopicCanvas as TopicBoard } from './TopicCanvas'
-import { MaterialPreview } from './MaterialPreview'
+import { TopicBoardPage as TopicBoard } from './features/topics/TopicBoardPage'
 import { SourcePanel } from './features/sources/SourcePanel'
-import { Workbench } from './features/workbench/Workbench'
-
-const materialIcon = (type: string) => type === 'link' ? <Link2 size={16}/> : type === 'note' ? <FilePlus2 size={16}/> : <FileText size={16}/>
-const toDay = (value?: string | null) => value ? new Intl.DateTimeFormat('zh-CN', { month: 'short', day: 'numeric' }).format(new Date(value)) : '未标记日期'
-type HistoryEntry = { undo(): Promise<void>; redo(): Promise<void> }
+import { Welcome } from './components/Welcome'
+import { Sidebar } from './components/Sidebar'
+import { Workbench } from './components/Workbench'
+import { Explorer } from './components/Explorer'
+import { ContextPanel } from './components/ContextPanel'
+import { ImportQueue } from './components/ImportQueue'
+import { MaterialMenu } from './components/MaterialMenu'
+import { LinkDialog, NoteDialog, SettingsDialog, TopicDialog, WorkspaceDialog } from './components/Dialogs'
+import { Toast } from './components/Toast'
 
 export default function App(): React.ReactElement {
   const [workspace, setWorkspace] = useState<Workspace | null>(null)
   const [recentWorkspaces, setRecentWorkspaces] = useState<Array<{ root: string; name: string; openedAt: string }>>([])
-  const [showWorkspaceMenu, setShowWorkspaceMenu] = useState(false)
   const [materials, setMaterials] = useState<Material[]>([])
   const [materialTopics, setMaterialTopics] = useState<Record<string, Topic[]>>({})
   const [topics, setTopics] = useState<Topic[]>([])
   const [archivedTopics, setArchivedTopics] = useState<Topic[]>([])
-  const [showArchived, setShowArchived] = useState(false)
   const [selected, setSelected] = useState<Material | null>(null)
+  const [showExplorer, setShowExplorer] = useState(false)
+  const [explorerMaterialId, setExplorerMaterialId] = useState<string | null>(null)
   const [activeTopic, setActiveTopic] = useState<TopicMap | null>(null)
   const [query, setQuery] = useState('')
   const [answer, setAnswer] = useState<GroundedAnswer | null>(null)
-  const [showNote, setShowNote] = useState(false); const [showLink, setShowLink] = useState(false); const [showTopic, setShowTopic] = useState(false); const [showSettings, setShowSettings] = useState(false); const [showSources, setShowSources] = useState(false)
+  const [showNote, setShowNote] = useState(false)
+  const [showLink, setShowLink] = useState(false)
+  const [showTopic, setShowTopic] = useState(false)
+  const [showSettings, setShowSettings] = useState(false)
+  const [showSources, setShowSources] = useState(false)
   const [workspaceRoot, setWorkspaceRoot] = useState<string | null>(null)
-  const [message, setMessage] = useState(''); const [contextMenu, setContextMenu] = useState<{ material: Material; x: number; y: number } | null>(null)
+  const [message, setMessage] = useState('')
+  const [contextMenu, setContextMenu] = useState<{ material: Material; x: number; y: number } | null>(null)
   const [imports, setImports] = useState<ImportNotice[]>([])
+
   const refreshRecent = async () => setRecentWorkspaces(await window.materialMap.workspace.recent())
-  const refresh = async () => { if (!workspace) return; const [nextMaterials, nextTopics, nextArchived] = await Promise.all([window.materialMap.materials.listWithTopics(), window.materialMap.topics.list(), window.materialMap.topics.listArchived()]); const typedMaterials = nextMaterials as Array<Material & { topics?: Topic[] }>; setMaterials(typedMaterials); setMaterialTopics(Object.fromEntries(typedMaterials.map((material) => [material.id, material.topics ?? []]))); setTopics(nextTopics as Topic[]); setArchivedTopics(nextArchived as Topic[]) }
-  const refreshTopics = async () => { if (!workspace) return; const [nextTopics, nextArchived] = await Promise.all([window.materialMap.topics.list(), window.materialMap.topics.listArchived()]); setTopics(nextTopics as Topic[]); setArchivedTopics(nextArchived as Topic[]) }
+  const refresh = async () => {
+    if (!workspace) return
+    const [nextMaterials, nextTopics, nextArchived] = await Promise.all([
+      window.materialMap.materials.listWithTopics(),
+      window.materialMap.topics.list(),
+      window.materialMap.topics.listArchived()
+    ])
+    const typedMaterials = nextMaterials as Array<Material & { topics?: Topic[] }>
+    setMaterials(typedMaterials)
+    setMaterialTopics(Object.fromEntries(typedMaterials.map((material) => [material.id, material.topics ?? []])))
+    setTopics(nextTopics as Topic[])
+    setArchivedTopics(nextArchived as Topic[])
+  }
+  const refreshTopics = async () => {
+    if (!workspace) return
+    const [nextTopics, nextArchived] = await Promise.all([window.materialMap.topics.list(), window.materialMap.topics.listArchived()])
+    setTopics(nextTopics as Topic[])
+    setArchivedTopics(nextArchived as Topic[])
+  }
+
   useEffect(() => { void refresh() }, [workspace])
-  useEffect(() => { const changed = () => { void refresh(); setMessage('已删除所选材料。') }; window.addEventListener('materials:changed', changed); return () => window.removeEventListener('materials:changed', changed) }, [workspace])
-  useEffect(() => { void refreshRecent(); window.materialMap.workspace.onMenu('workspace:new', () => void createWorkspace()); window.materialMap.workspace.onMenu('workspace:open', () => void openWorkspace()); window.materialMap.workspace.onMenu('workspace:close', () => setWorkspace(null)) }, [])
-  useEffect(() => { if (!selected) return; const next = materials.find((item) => item.id === selected.id); if (next) setSelected(next) }, [materials, selected])
-  useEffect(() => { if (!imports.some((item) => item.status === 'queued' || item.status === 'running')) return; const timer = window.setInterval(() => void refresh(), 800); return () => window.clearInterval(timer) }, [imports, workspace])
-  useEffect(() => { setImports((old) => { const next = syncImportNotices(old, materials); return next.some((item, index) => item !== old[index]) ? next : old }) }, [materials, imports])
-  const openTopic = async (topic: Topic) => { try { setActiveTopic(await window.materialMap.topics.map(topic.id) as TopicMap); setSelected(null) } catch (error) { setActiveTopic(null); setMessage(error instanceof Error ? `无法打开主题：${error.message}` : '无法打开主题。') } }
+  useEffect(() => {
+    const changed = () => { void refresh(); setMessage('已删除所选材料。') }
+    window.addEventListener('materials:changed', changed)
+    return () => window.removeEventListener('materials:changed', changed)
+  }, [workspace])
+  useEffect(() => {
+    void refreshRecent()
+    window.materialMap.workspace.onMenu('workspace:new', () => void createWorkspace())
+    window.materialMap.workspace.onMenu('workspace:open', () => void openWorkspace())
+    window.materialMap.workspace.onMenu('workspace:close', () => setWorkspace(null))
+  }, [])
+  useEffect(() => {
+    if (!selected) return
+    const next = materials.find((item) => item.id === selected.id)
+    if (next) setSelected(next)
+  }, [materials, selected])
+  useEffect(() => {
+    if (!imports.some((item) => item.status === 'queued' || item.status === 'running')) return
+    const timer = window.setInterval(() => void refresh(), 800)
+    return () => window.clearInterval(timer)
+  }, [imports, workspace])
+  useEffect(() => {
+    setImports((old) => {
+      const next = syncImportNotices(old, materials)
+      return next.some((item, index) => item !== old[index]) ? next : old
+    })
+  }, [materials, imports])
+
+  const openTopic = async (topic: Topic) => {
+    try {
+      setActiveTopic(await window.materialMap.topics.map(topic.id) as TopicMap)
+      setSelected(null)
+      setShowExplorer(false)
+    } catch (error) {
+      setActiveTopic(null)
+      setMessage(error instanceof Error ? `无法打开主题：${error.message}` : '无法打开主题。')
+    }
+  }
   const importPaths = async (paths: string[], keepDuplicate = false, target?: { topicId: string; position: { x: number; y: number } }) => {
     if (!paths.length) return
     setImports((old) => [...paths.map((path) => ({ path, title: path.split(/[\\/]/).at(-1) ?? path, status: 'queued' as const })), ...old].slice(0, 12))
     for (const path of paths) try {
       const result = await window.materialMap.materials.import(path, keepDuplicate) as { material: Material; duplicateOf?: Material }
-      if (target && !result.duplicateOf) { await window.materialMap.topics.addMaterial(target.topicId, result.material.id); await window.materialMap.topics.positionMaterial(target.topicId, result.material.id, target.position.x, target.position.y) }
+      if (target && !result.duplicateOf) {
+        await window.materialMap.topics.addMaterial(target.topicId, result.material.id)
+        await window.materialMap.topics.positionMaterial(target.topicId, result.material.id, target.position.x, target.position.y)
+      }
       setImports((old) => old.map((item) => item.path === path ? { ...item, materialId: result.material.id, title: result.material.title, status: result.duplicateOf ? 'duplicate' : item.status === 'complete' ? 'complete' : result.material.status } : item))
-    } catch { setImports((old) => old.map((item) => item.path === path ? { ...item, status: 'failed' } : item)) }
+    } catch {
+      setImports((old) => old.map((item) => item.path === path ? { ...item, status: 'failed' } : item))
+    }
     await refresh()
   }
   const importFiles = async () => importPaths(await window.materialMap.chooseFiles())
-  const createWorkspace = async () => { const root = await window.materialMap.chooseDirectory(); if (root) setWorkspaceRoot(root) }
-  const openWorkspace = async () => { const root = await window.materialMap.chooseDirectory(); if (!root) return; try { setWorkspace(await window.materialMap.workspace.open(root) as Workspace); await refreshRecent() } catch (error) { setMessage(error instanceof Error ? error.message : '无法打开工作区') } }
-  const importWorkspace = async () => { const file = await window.materialMap.choosePackage(); if (!file) return; const destination = await window.materialMap.chooseDirectory(); if (!destination) return; try { setWorkspace(await window.materialMap.workspace.import(file, destination) as Workspace); await refreshRecent(); setMessage('工作区已导入。') } catch (error) { setMessage(error instanceof Error ? error.message : '无法导入工作区。') } }
-  const openRecent = async (root: string) => { try { setWorkspace(await window.materialMap.workspace.open(root) as Workspace); await refreshRecent() } catch { setMessage('这个工作区已无法打开，请确认文件夹仍然存在。') } }
-  const createDemo = async () => { try { const topic = await window.materialMap.demo.create() as Topic; await refresh(); await openTopic(topic); setMessage('已创建 AI 关联演示，正在分析主题材料。') } catch (error) { setMessage(error instanceof Error ? error.message : '无法创建 AI 演示。') } }
+  const createWorkspace = async () => {
+    const root = await window.materialMap.chooseDirectory()
+    if (root) setWorkspaceRoot(root)
+  }
+  const openWorkspace = async () => {
+    const root = await window.materialMap.chooseDirectory()
+    if (!root) return
+    try {
+      setWorkspace(await window.materialMap.workspace.open(root) as Workspace)
+      await refreshRecent()
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '无法打开工作区')
+    }
+  }
+  const importWorkspace = async () => {
+    const file = await window.materialMap.choosePackage()
+    if (!file) return
+    const destination = await window.materialMap.chooseDirectory()
+    if (!destination) return
+    try {
+      setWorkspace(await window.materialMap.workspace.import(file, destination) as Workspace)
+      await refreshRecent()
+      setMessage('工作区已导入。')
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '无法导入工作区。')
+    }
+  }
+  const openRecent = async (root: string) => {
+    try {
+      setWorkspace(await window.materialMap.workspace.open(root) as Workspace)
+      await refreshRecent()
+    } catch {
+      setMessage('这个工作区已无法打开，请确认文件夹仍然存在。')
+    }
+  }
+  const exportWorkspace = async () => {
+    const destination = await window.materialMap.savePackage()
+    if (destination) {
+      await window.materialMap.workspace.export(destination)
+      setMessage('工作区已导出。')
+    }
+  }
+  const createDemo = async () => {
+    try {
+      const topic = await window.materialMap.demo.create() as Topic
+      await refresh()
+      await openTopic(topic)
+      setMessage('已创建 AI 关联演示，正在分析主题材料。')
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '无法创建 AI 演示。')
+    }
+  }
   const createTopicFromMaterials = async (materialIds: string[]) => {
-    const name = window.prompt('新主题名称'); if (!name?.trim()) return
+    const name = window.prompt('新主题名称')
+    if (!name?.trim()) return
     const topic = await window.materialMap.topics.create(name.trim()) as Topic
     await window.materialMap.topics.addMaterials(topic.id, materialIds)
-    const map = await window.materialMap.topics.map(topic.id) as TopicMap
-    const positions = map.materials.map((material, index) => ({ materialId: material.id, x: 120 + (index % 4) * 270, y: 100 + Math.floor(index / 4) * 180 }))
-    await window.materialMap.topics.layout(topic.id, positions)
-    await refresh(); setActiveTopic(await window.materialMap.topics.map(topic.id) as TopicMap); setSelected(null)
-    setMessage(`已将 ${materialIds.length} 份材料加入主题，正在请求 AI 排序和连线。`)
-    try { const result = await window.materialMap.analysis.topic(topic.id) as AnalysisSummary; setActiveTopic(await window.materialMap.topics.map(topic.id) as TopicMap); await refresh(); setMessage(result.addedRelations ? `AI 已提出 ${result.addedRelations} 条关系，等待审核。` : 'AI 暂未找到足够证据，已保留网格布局。') }
-    catch (error) { setMessage(error instanceof Error ? `AI 分析未运行：${error.message}` : 'AI 分析未运行，已保留网格布局。') }
+    await refresh()
+    setActiveTopic(await window.materialMap.topics.map(topic.id) as TopicMap)
+    setSelected(null)
+    setMessage(`已将 ${materialIds.length} 份材料加入主题，默认拓扑已生成。需要补充关系时，请在画板中主动请求 AI。`)
   }
-  if (!workspace) return <><Welcome recent={recentWorkspaces} onCreate={createWorkspace} onOpen={openWorkspace} onImport={importWorkspace} onRecent={openRecent} onForget={async (root) => { await window.materialMap.workspace.forgetRecent(root); await refreshRecent() }}/>{workspaceRoot && <WorkspaceDialog root={workspaceRoot} onClose={() => setWorkspaceRoot(null)} onSave={async (name) => { try { setWorkspace(await window.materialMap.workspace.create(workspaceRoot, name) as Workspace); setWorkspaceRoot(null); await refreshRecent() } catch (error) { setMessage(error instanceof Error ? error.message : '无法创建工作区') } }}/>}<Toast message={message} onClose={() => setMessage('')}/></>
-  const topicRefresh = async () => { if (!activeTopic) return; try { setActiveTopic(await window.materialMap.topics.map(activeTopic.topic.id) as TopicMap); await refresh() } catch (error) { setMessage(error instanceof Error ? `无法刷新主题：${error.message}` : '无法刷新主题。') } }
-  return <div className="app-shell">
-    <aside className="sidebar"><div className="brand"><div className="brand-mark"><Network size={19}/></div><span>Material Map</span></div><button className="workspace-switch" onClick={() => setShowWorkspaceMenu(!showWorkspaceMenu)}><span className="workspace-dot"/><span>{workspace.name}</span><ChevronRight size={15}/></button>{showWorkspaceMenu && <div className="workspace-popover"><button onClick={() => void createWorkspace()}>新建工作区</button><button onClick={() => void openWorkspace()}>打开工作区</button><button onClick={() => void importWorkspace()}>导入工作区</button>{recentWorkspaces.filter((item) => item.root !== workspace.root).map((item) => <button key={item.root} onClick={() => void openRecent(item.root)}>{item.name}</button>)}<button onClick={() => setWorkspace(null)}>关闭工作区</button></div>}<nav><button className={!activeTopic ? 'nav-item active' : 'nav-item'} onClick={() => { setActiveTopic(null); setSelected(null) }}><Archive size={17}/>工作台</button><div className="nav-section"><span>主题</span><button title="新建主题" onClick={() => setShowTopic(true)}><Plus size={15}/></button></div>{topics.map((topic) => <button key={topic.id} className={activeTopic?.topic.id === topic.id ? 'topic-item active' : 'topic-item'} onClick={() => void openTopic(topic)}><Map size={15}/>{topic.name}</button>)}<div className="nav-section archived-heading"><button className="archived-toggle" onClick={() => setShowArchived((value) => !value)}><Archive size={14}/>已归档 {archivedTopics.length ? `(${archivedTopics.length})` : ''}</button></div>{showArchived && archivedTopics.map((topic) => <div className="archived-topic" key={topic.id}><span>{topic.name}</span><button title="还原主题" onClick={async () => { await window.materialMap.topics.restore(topic.id); await refreshTopics(); setMessage(`已还原“${topic.name}”。`) }}>还原</button><button title="永久删除主题记录" onClick={async () => { if (!window.confirm(`永久删除主题“${topic.name}”的画板记录？原材料和文件不会删除。`)) return; await window.materialMap.topics.deleteArchived(topic.id); await refreshTopics() }}><Trash2 size={13}/></button></div>)}</nav><div className="sidebar-bottom"><button className="nav-item" onClick={() => setShowSources(true)}><FolderOpen size={17}/>文件夹来源</button><button className="nav-item" onClick={() => setShowSettings(true)}><Settings2 size={17}/>模型与隐私</button><button className="nav-item" onClick={async () => { const destination = await window.materialMap.savePackage(); if (destination) { await window.materialMap.workspace.export(destination); setMessage('工作区已导出。') } }}><Upload size={17}/>导出工作区</button></div></aside>
-    <main className="main" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); const paths = [...event.dataTransfer.files].map((file) => window.materialMap.filePath(file)).filter(Boolean); void importPaths(paths, false, activeTopic ? { topicId: activeTopic.topic.id, position: { x: 180, y: 140 } } : undefined) }}><header className="topbar"><div>{activeTopic ? <><button className="back-button" onClick={() => setActiveTopic(null)}><ArrowLeft size={17}/>工作台</button><h1>{activeTopic.topic.name}</h1></> : <><h1>工作台</h1><p>最近导入的材料，正在逐渐连成脉络。</p></>}</div><div className="top-actions"><label className="search"><Search size={16}/><input value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && query.trim()) void window.materialMap.ask(query).then(setAnswer) }} placeholder="搜索材料或主题"/></label>{activeTopic && <button className="secondary-button" onClick={async () => { if (!window.confirm(`归档主题“${activeTopic.topic.name}”？不会删除任何材料和文件。`)) return; await window.materialMap.topics.archive(activeTopic.topic.id); setActiveTopic(null); await refresh(); setMessage('主题已归档。') }}><Archive size={15}/>归档主题</button>}<button className="icon-button" title="基于本地材料提问" disabled={!query.trim()} onClick={() => void window.materialMap.ask(query).then(setAnswer)}><Bot size={18}/></button><button className="icon-button" title="导入文件" onClick={() => void importFiles()}><Upload size={18}/></button><button className="primary-button" onClick={() => setShowNote(true)}><Plus size={17}/>新建材料</button></div></header>{imports.length > 0 && <ImportQueue items={imports} onRetry={(path, keepDuplicate) => void importPaths([path], keepDuplicate)} onClear={() => setImports([])}/>} {answer && <section className="answer-panel"><div className="answer-heading"><span><Bot size={16}/>基于本地材料的回答</span><button className="icon-button" onClick={() => setAnswer(null)}><X size={15}/></button></div><p>{answer.answer}</p><div className="answer-meta">{answer.confidence === 'grounded' ? '已基于本地证据' : '材料中没有足够证据'} · {answer.retrievalMode === 'fts' ? '全文检索' : answer.retrievalMode === 'hybrid' ? '混合检索' : '降级检索'}</div>{answer.citations.length > 0 && <div className="citations">{answer.citations.map((citation) => <button key={`${citation.materialId}:${citation.chunkId ?? 'material'}`} onClick={() => { const material = materials.find((item) => item.id === citation.materialId); if (material) setSelected(material) }}><FileText size={13}/>{citation.title}{citation.pageNumber ? ` · 第 ${citation.pageNumber} 页` : ''}</button>)}</div>}</section>}{activeTopic ? <TopicBoard map={activeTopic} materials={materials} onRefresh={topicRefresh} onSelect={setSelected} onImportFiles={(paths, position) => importPaths(paths, false, { topicId: activeTopic.topic.id, position })}/> : <Workbench materials={materials.filter((item) => !query || `${item.title} ${item.excerpt ?? ''} ${(materialTopics[item.id] ?? []).map((topic) => topic.name).join(' ')}`.toLowerCase().includes(query.toLowerCase()))} materialTopics={materialTopics} topics={topics} onSelect={setSelected} onContext={(material, x, y) => setContextMenu({ material, x, y })} onImport={importFiles} onLink={() => setShowLink(true)} onDemo={() => void createDemo()} onCreateTopic={createTopicFromMaterials}/>}</main>
-    {selected && <ContextPanel material={selected} topics={topics} activeTopic={activeTopic} onClose={() => setSelected(null)} onRefresh={activeTopic ? topicRefresh : refresh} onOpenTopic={openTopic}/>} {showSources && <SourcePanel onClose={() => setShowSources(false)} onChanged={refresh} />} {showNote && <NoteDialog onClose={() => setShowNote(false)} onSave={async (title, text, format) => { if (format === 'note') await window.materialMap.materials.note(title, text); else await window.materialMap.materials.document(title, text, format); setShowNote(false); await refresh() }}/>} {showLink && <LinkDialog onClose={() => setShowLink(false)} onSave={async (url) => { await window.materialMap.materials.link(url); setShowLink(false); await refresh() }}/>} {showTopic && <TopicDialog onClose={() => setShowTopic(false)} onSave={async (name, description) => { const topic = await window.materialMap.topics.create(name, description) as Topic; setShowTopic(false); await refresh(); void openTopic(topic) }}/>} {showSettings && <SettingsDialog topicId={activeTopic?.topic.id} onClose={() => setShowSettings(false)} />} {contextMenu && <MaterialMenu material={contextMenu.material} x={contextMenu.x} y={contextMenu.y} onClose={() => setContextMenu(null)} onOpen={() => setSelected(contextMenu.material)} onRefresh={refresh} onMessage={setMessage}/>}<Toast message={message} onClose={() => setMessage('')}/>
-  </div>
-}
+  const askQuestion = () => { if (query.trim()) void window.materialMap.ask(query).then(setAnswer) }
 
-function Toast({ message, onClose }: { message: string; onClose(): void }): React.ReactElement | null { useEffect(() => { if (!message) return; const timer = window.setTimeout(onClose, 3000); return () => window.clearTimeout(timer) }, [message, onClose]); return message ? <div className="toast"><CircleAlert size={17}/>{message}<button onClick={onClose}><X size={15}/></button></div> : null }
-function Welcome({ recent, onCreate, onOpen, onImport, onRecent, onForget }: { recent: Array<{ root: string; name: string; openedAt: string }>; onCreate(): void; onOpen(): void; onImport(): void; onRecent(root: string): void; onForget(root: string): void }): React.ReactElement { return <div className="welcome"><div className="welcome-mark"><Network size={32}/></div><p className="eyebrow">LOCAL MATERIAL MAP</p><h1>让材料自己长出脉络。</h1><p className="welcome-copy">文件、笔记和链接都保留在自己的工作区。导入后，按你的主题和时间慢慢形成一张可编辑的材料地图。</p><div className="welcome-actions"><button className="primary-button large" onClick={onCreate}><Plus size={18}/>创建工作区</button><button className="secondary-button large" onClick={onOpen}><FolderOpen size={18}/>打开工作区</button><button className="secondary-button large" onClick={onImport}><Upload size={18}/>导入工作区</button></div>{recent.length > 0 && <div className="recent-workspaces"><h2>最近工作区</h2>{recent.map((item) => <div key={item.root}><button onClick={() => onRecent(item.root)}><FolderOpen size={15}/><span>{item.name}</span><small>{item.root}</small></button><button title="从最近列表移除" onClick={() => onForget(item.root)}><X size={14}/></button></div>)}</div>}</div> }
-function WorkspaceDialog({ root, onClose, onSave }: { root: string; onClose(): void; onSave(name: string): void }): React.ReactElement { const [name, setName] = useState('我的材料'); return <Modal title="创建工作区" onClose={onClose}><p className="dialog-note">将在此文件夹中保存材料副本、索引和地图数据。</p><input value={root} readOnly/><input autoFocus value={name} onChange={(event) => setName(event.target.value)} placeholder="工作区名称"/><button className="primary-button" disabled={!name.trim()} onClick={() => onSave(name.trim())}>创建工作区</button></Modal> }
-function ImportQueue({ items, onRetry, onClear }: { items: ImportNotice[]; onRetry(path: string, keepDuplicate?: boolean): void; onClear(): void }): React.ReactElement { return <section className="import-queue"><div><strong>导入队列</strong><button className="icon-button" title="清除记录" onClick={onClear}><X size={14}/></button></div>{items.map((item) => <div key={item.path}><span>{item.title}</span>{item.status === 'duplicate' ? <small>已跳过重复文件 <button onClick={() => onRetry(item.path, true)}>仍然导入副本</button></small> : item.status === 'failed' ? <button onClick={() => onRetry(item.path)}>重试</button> : item.status === 'paused' ? <small>待按需解析</small> : item.status === 'complete' ? <small className="complete"><CheckCircle2 size={13}/>已完成</small> : <small><LoaderCircle size={13}/>正在解析</small>}</div>)}</section> }
-function LegacyWorkbenchV1({ materials, materialTopics, topics, onSelect, onContext, onImport, onLink, onDemo, onCreateTopic, onRefresh, onMessage }: { materials: Material[]; materialTopics: Record<string, Topic[]>; topics: Topic[]; onSelect(material: Material): void; onContext(material: Material, x: number, y: number): void; onImport(): void; onLink(): void; onDemo(): void; onCreateTopic(materialIds: string[]): void; onRefresh?: () => Promise<void>; onMessage?: (message: string) => void }): React.ReactElement {
-  const pageSize = 15
-  const [page, setPage] = useState(1)
-  const [selectedIds, setSelectedIds] = useState<string[]>([]); const [deletedIds, setDeletedIds] = useState<string[]>([])
-  const [anchorId, setAnchorId] = useState<string | null>(null)
-  const [topicFilter, setTopicFilter] = useState('')
-  const [sort, setSort] = useState<'recent' | 'topic'>('recent')
-  useEffect(() => setPage(1), [materials, topicFilter, sort])
-  const filtered = materials.filter((material) => !deletedIds.includes(material.id) && (!topicFilter || materialTopics[material.id]?.some((topic) => topic.id === topicFilter)))
-  const ordered = [...filtered].sort((a, b) => { if (sort === 'recent') return (b.importedAt ?? '').localeCompare(a.importedAt ?? ''); const left = materialTopics[a.id]?.[0]; const right = materialTopics[b.id]?.[0]; if (!left && !right) return (b.importedAt ?? '').localeCompare(a.importedAt ?? ''); if (!left) return 1; if (!right) return -1; return left.name.localeCompare(right.name, 'zh-CN') || (right.createdAt ?? '').localeCompare(left.createdAt ?? '') || (b.importedAt ?? '').localeCompare(a.importedAt ?? '') })
-  const pageCount = Math.max(1, Math.ceil(ordered.length / pageSize))
-  const currentPage = Math.min(page, pageCount)
-  const visible = ordered.slice((currentPage - 1) * pageSize, currentPage * pageSize)
-  useEffect(() => { const clear = (event: KeyboardEvent) => { if (event.key === 'Escape') setSelectedIds([]) }; window.addEventListener('keydown', clear); return () => window.removeEventListener('keydown', clear) }, [])
-  const toggle = (material: Material, event: React.MouseEvent) => { if (event.shiftKey && anchorId) { const start = ordered.findIndex((item) => item.id === anchorId); const end = ordered.findIndex((item) => item.id === material.id); setSelectedIds(ordered.slice(Math.min(start, end), Math.max(start, end) + 1).map((item) => item.id)); return } if (event.metaKey || event.ctrlKey) { setSelectedIds((current) => current.includes(material.id) ? current.filter((id) => id !== material.id) : [...current, material.id]); setAnchorId(material.id); return } setSelectedIds([material.id]); setAnchorId(material.id) }
-  if (materials.length === 0) return <section className="workbench"><div className="empty-state"><div className="empty-icon"><Upload size={25}/></div><h2>从一份材料开始</h2><p>拖入文件、写一段笔记，或者先打开一个完整的学习路径演示。</p><div><button className="primary-button" onClick={onImport}><Upload size={17}/>导入文件</button><button className="secondary-button" onClick={onLink}><Link2 size={17}/>添加链接</button><button className="secondary-button" onClick={onDemo}><Sparkles size={17}/>创建 AI 演示</button></div></div></section>
-  const deleteSelected = async (): Promise<void> => { const count = selectedIds.length; if (!count || !window.confirm(`删除所选 ${count} 份材料？仅删除工作区记录，不会删除源文件。`)) return; await Promise.all(selectedIds.map((id) => window.materialMap.materials.delete(id))); setDeletedIds((current) => [...current, ...selectedIds]); setSelectedIds([]); window.dispatchEvent(new Event('materials:changed')); await onRefresh?.(); onMessage?.(`已删除 ${count} 份材料。`) }
-  return <section className="workbench"><div className="section-heading"><div><h2>最近导入</h2><p>材料完成分析后会自动补充摘要与关联。</p></div><div className="workbench-actions"><button className="secondary-button" onClick={onDemo}><Sparkles size={15}/>创建 AI 演示</button><span>{filtered.length} 份材料</span></div></div><div className="workbench-filters"><select value={topicFilter} onChange={(event) => setTopicFilter(event.target.value)}><option value="">全部主题</option>{topics.map((topic) => <option key={topic.id} value={topic.id}>{topic.name}</option>)}</select><select value={sort} onChange={(event) => setSort(event.target.value as 'recent' | 'topic')}><option value="recent">最近导入</option><option value="topic">按主题</option></select></div>{selectedIds.length > 0 && <div className="bulk-material-actions"><span>已选择 {selectedIds.length} 份材料</span><button className="primary-button" onClick={() => onCreateTopic(selectedIds)}>从所选创建主题</button><button className="danger-button" onClick={() => void deleteSelected()}>删除所选</button><button className="secondary-button" onClick={() => setSelectedIds([])}>取消选择</button></div>}<div className="material-grid">{visible.map((material) => <MaterialCard key={material.id} material={material} topics={materialTopics[material.id] ?? []} selected={selectedIds.includes(material.id)} onClick={(event) => { if (event.metaKey || event.ctrlKey || event.shiftKey || selectedIds.length) toggle(material, event); else onSelect(material) }} onContext={(x, y) => onContext(material, x, y)}/>)}</div>{pageCount > 1 && <div className="workbench-pagination"><button className="secondary-button" disabled={currentPage === 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>上一页</button><span>第 {currentPage} / {pageCount} 页</span><button className="secondary-button" disabled={currentPage === pageCount} onClick={() => setPage((value) => Math.min(pageCount, value + 1))}>下一页</button></div>}</section>
-}
-function LegacyWorkbench({ materials, onSelect, onContext, onImport, onLink, onDemo }: { materials: Material[]; onSelect(material: Material): void; onContext(material: Material, x: number, y: number): void; onImport(): void; onLink(): void; onDemo(): void }): React.ReactElement { return <section className="workbench">{materials.length === 0 ? <div className="empty-state"><div className="empty-icon"><Upload size={25}/></div><h2>从一份材料开始</h2><p>拖入文件、写一段笔记，或者留下一条链接。</p><div><button className="primary-button" onClick={onImport}><Upload size={17}/>导入文件</button><button className="secondary-button" onClick={onLink}><Link2 size={17}/>添加链接</button></div></div> : <><div className="section-heading"><div><h2>最近导入</h2><p>材料完成分析后会自动补充摘要与关联。</p></div><div className="workbench-actions"><button className="secondary-button" onClick={onDemo}><Sparkles size={15}/>创建 AI 演示</button><span>{materials.length} 份材料</span></div></div><div className="material-grid">{materials.map((material) => <MaterialCard key={material.id} material={material} onClick={() => onSelect(material)} onContext={(x, y) => onContext(material, x, y)}/>)}</div></>}</section> }
-function MaterialCard({ material, topics = [], selected, onClick, onContext }: { material: Material; topics?: Topic[]; selected?: boolean; onClick(event: React.MouseEvent): void; onContext(x:number,y:number): void }): React.ReactElement { const primary = topics[0]; return <button className={`material-card ${selected ? 'selected' : ''}`} style={primary ? { borderColor: primary.color } : undefined} onClick={onClick} onContextMenu={(event) => { event.preventDefault(); onContext(event.clientX, event.clientY) }}><div className={`material-type ${material.type}`}>{materialIcon(material.type)}<span>{material.type === 'file' ? '文件' : material.type === 'document' ? '文档' : material.type === 'note' ? '笔记' : '链接'}</span></div><h3>{material.title}</h3><p>{material.availability === 'unavailable' ? '原始文件已失联，仍可查看最近快照。' : material.excerpt || material.error || (material.status === 'running' ? '正在解析材料…' : '等待分析材料内容')}</p>{topics.length > 0 && <div className="material-topic-tags">{topics.slice(0, 3).map((topic) => <span key={topic.id} style={{ borderColor: topic.color, color: topic.color }}>{topic.name}</span>)}</div>}<div className="card-footer"><span><Clock3 size={13}/>{toDay(material.occurredAt)}</span><Status status={material.status} availability={material.availability}/></div></button> }
-function Status({ status, availability }: { status: string; availability?: Material['availability'] }): React.ReactElement { if (availability === 'unavailable') return <span className="status failed"><CircleAlert size={13}/>原文件失联</span>; if (status === 'complete') return <span className="status complete"><CheckCircle2 size={13}/>已整理</span>; if (status === 'failed') return <span className="status failed"><CircleAlert size={13}/>需重试</span>; return <span className="status pending"><LoaderCircle size={13}/>处理中</span> }
+  if (!workspace) {
+    return (
+      <>
+        <Welcome
+          recent={recentWorkspaces}
+          onCreate={createWorkspace}
+          onOpen={openWorkspace}
+          onImport={importWorkspace}
+          onRecent={openRecent}
+          onForget={async (root) => { await window.materialMap.workspace.forgetRecent(root); await refreshRecent() }}
+        />
+        {workspaceRoot && (
+          <WorkspaceDialog
+            root={workspaceRoot}
+            onClose={() => setWorkspaceRoot(null)}
+            onSave={async (name) => {
+              try {
+                setWorkspace(await window.materialMap.workspace.create(workspaceRoot, name) as Workspace)
+                setWorkspaceRoot(null)
+                await refreshRecent()
+              } catch (error) {
+                setMessage(error instanceof Error ? error.message : '无法创建工作区')
+              }
+            }}
+          />
+        )}
+        <Toast message={message} onClose={() => setMessage('')}/>
+      </>
+    )
+  }
 
-function BoardAttributes({ topic, material, onRefresh }: { topic: TopicMap; material: Material; onRefresh(): Promise<void> }): React.ReactElement | null {
-  const card = topic.materials.find((item) => item.id === material.id)
-  const [color, setColor] = useState(card?.cardColor ?? '#08776f')
-  const [tags, setTags] = useState((card?.cardTags ?? []).join(', '))
-  const [note, setNote] = useState(card?.cardNote ?? '')
-  const [sequence, setSequence] = useState(card?.sequenceSource === 'manual' ? String(card.sequence ?? '') : '')
-  useEffect(() => { setColor(card?.cardColor ?? '#08776f'); setTags((card?.cardTags ?? []).join(', ')); setNote(card?.cardNote ?? ''); setSequence(card?.sequenceSource === 'manual' ? String(card.sequence ?? '') : '') }, [card?.cardColor, card?.cardNote, card?.cardTags, card?.sequence, card?.sequenceSource, material.id])
-  if (!card) return null
-  const save = async () => { await window.materialMap.topics.updateCardStyle(topic.topic.id, material.id, { color, tags: tags.split(',').map((tag) => tag.trim()), note }); if (sequence.trim()) await window.materialMap.cardOrder.update(topic.topic.id, material.id, Number(sequence)); await onRefresh() }
-  return <section className="panel-section board-attributes"><h3>画板属性</h3><label>卡片顺序<input type="number" min="1" value={sequence} onChange={(event) => setSequence(event.target.value)} placeholder="按时间自动排序"/></label><button className="secondary-button" onClick={() => void window.materialMap.cardOrder.reset(topic.topic.id).then(onRefresh)}>恢复时间顺序</button><label>卡片颜色<span className="color-control"><input type="color" value={color} onChange={(event) => setColor(event.target.value)}/>{['#08776f', '#3568b8', '#a14569', '#b26a21', '#7654a6'].map((value) => <button key={value} title={value} className={color === value ? 'active' : ''} style={{ backgroundColor: value }} onClick={() => setColor(value)}/>)}</span></label><label>标签<input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="例如：需求, 重点, 待验证"/></label><label>画板备注<textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="只保存在当前主题画板中"/></label><button className="secondary-button" onClick={() => void save()}>保存画板属性</button></section>
-}
+  const topicRefresh = async () => {
+    if (!activeTopic) return
+    try {
+      setActiveTopic(await window.materialMap.topics.map(activeTopic.topic.id) as TopicMap)
+      await refresh()
+    } catch (error) {
+      setMessage(error instanceof Error ? `无法刷新主题：${error.message}` : '无法刷新主题。')
+    }
+  }
+  const openExplorerById = (materialId: string) => {
+    setExplorerMaterialId(materialId)
+    setShowExplorer(true)
+    setSelected(null)
+  }
+  const openInExplorer = (material: Material) => openExplorerById(material.id)
 
-function MapNode({ data }: NodeProps): React.ReactElement { const { material, focused, connectMode } = data as { material: TopicMap['materials'][number]; focused?: boolean; connectMode?: boolean }; return <div className={`flow-material-node ${focused ? 'focused' : ''}`}><Handle type="target" position={Position.Left} isConnectable={connectMode}/><small>{toDay(material.occurredAt)}</small><strong>{material.title}</strong><span>{material.type === 'link' ? '链接' : material.type === 'note' ? '笔记' : '材料'}</span><Handle type="source" position={Position.Right} isConnectable={connectMode}/></div> }
-const nodeTypes = { material: MapNode }
-function LegacyTopicCanvas({ map, materials, onRefresh, onSelect }: { map: TopicMap; materials: Material[]; onRefresh(): Promise<void>; onSelect(material: Material): void }): React.ReactElement {
-  const [source, setSource] = useState(''); const [analysis, setAnalysis] = useState<AnalysisStatus>({ running: 0, complete: 0, failed: 0, latestError: null }); const [analysisResult, setAnalysisResult] = useState<string | null>(null); const [analyzing, setAnalyzing] = useState(false); const [selectedEdge, setSelectedEdge] = useState<string | null>(null); const [past, setPast] = useState<HistoryEntry[]>([]); const [future, setFuture] = useState<HistoryEntry[]>([]); const [flow, setFlow] = useState<ReactFlowInstance | null>(null); const [locator, setLocator] = useState(''); const [focusedId, setFocusedId] = useState<string | null>(null); const [mapNotice, setMapNotice] = useState(''); const [tool, setTool] = useState<'select'|'pan'|'connect'>('select'); const [relationLabel, setRelationLabel] = useState('')
-  const refreshAnalysis = async () => setAnalysis(await window.materialMap.analysis.status(map.topic.id) as AnalysisStatus)
-  useEffect(() => { void refreshAnalysis(); const timer = window.setInterval(() => void refreshAnalysis(), 1500); return () => window.clearInterval(timer) }, [map.topic.id])
-  const layout = useMemo((): Node[] => map.materials.map((material, index) => ({ id: material.id, type: 'material', zIndex: 1, position: { x: material.canvasX ?? 120 + (index % 4) * 220, y: material.canvasY ?? 100 + Math.floor(index / 4) * 150 }, data: { material, focused: material.id === focusedId, connectMode: tool === 'connect' } })), [map.materials, focusedId, tool])
-  const edges = useMemo(() => map.relations.map((relation) => ({ id: relation.id, source: relation.sourceMaterialId, target: relation.targetMaterialId, label: relation.label, labelBgPadding: [5, 3] as [number, number], labelBgBorderRadius: 3, labelBgStyle: { fill: '#ffffff', fillOpacity: .92 }, labelStyle: { fill: '#29465f', fontSize: 12, fontWeight: 700 }, style: { strokeWidth: 2.25 }, animated: relation.createdBy === 'ai', type: 'smoothstep' })), [map])
-  const record = (entry: HistoryEntry) => { setPast((old) => [...old, entry].slice(-20)); setFuture([]) }
-  const createRelation = async (sourceId: string, targetId: string) => { if (sourceId === targetId) return; let relationId = (await window.materialMap.relations.create({ sourceMaterialId: sourceId, targetMaterialId: targetId, label: '关联', relationType: 'related', evidenceText: null, evidenceMaterialId: sourceId, confidence: null, createdBy: 'manual' }) as Relation).id; record({ undo: () => window.materialMap.relations.delete(relationId), redo: async () => { relationId = (await window.materialMap.relations.create({ sourceMaterialId: sourceId, targetMaterialId: targetId, label: '关联', relationType: 'related', evidenceText: null, evidenceMaterialId: sourceId, confidence: null, createdBy: 'manual' }) as Relation).id } }); await onRefresh() }
-  const updateLabel = async () => { const relation = map.relations.find((item) => item.id === selectedEdge); const label = relationLabel.trim(); if (!relation || !label || label === relation.label) return; await window.materialMap.relations.update(relation.id, label); record({ undo: () => window.materialMap.relations.update(relation.id, relation.label), redo: () => window.materialMap.relations.update(relation.id, label) }); await onRefresh() }
-  const deleteRelation = async () => { const relation = map.relations.find((item) => item.id === selectedEdge); if (!relation) return; let relationId = relation.id; await window.materialMap.relations.delete(relationId); record({ undo: async () => { relationId = (await window.materialMap.relations.create({ sourceMaterialId: relation.sourceMaterialId, targetMaterialId: relation.targetMaterialId, label: relation.label, relationType: relation.relationType, evidenceText: relation.evidenceText ?? null, evidenceMaterialId: relation.evidenceMaterialId ?? null, confidence: relation.confidence ?? null, createdBy: relation.createdBy as 'ai' | 'manual' }) as Relation).id }, redo: () => window.materialMap.relations.delete(relationId) }); setSelectedEdge(null); await onRefresh() }
-  const undo = async () => { const entry = past.at(-1); if (!entry) return; await entry.undo(); setPast((old) => old.slice(0, -1)); setFuture((old) => [...old, entry]); await onRefresh() }
-  const redo = async () => { const entry = future.at(-1); if (!entry) return; await entry.redo(); setFuture((old) => old.slice(0, -1)); setPast((old) => [...old, entry]); await onRefresh() }
-  const attach = async () => { const material = materials.find((item) => item.id === source); if (!material) return; await window.materialMap.topics.addMaterial(map.topic.id, material.id); setSource(''); await onRefresh() }
-  const createCard = async () => { const material = await window.materialMap.materials.note('未命名卡片', ''); await window.materialMap.topics.addMaterial(map.topic.id, (material as Material).id); await window.materialMap.topics.positionMaterial(map.topic.id, (material as Material).id, 220, 170); await onRefresh(); onSelect(material as Material) }
-  const analyzeTopic = async () => { setAnalyzing(true); try { const result = await window.materialMap.analysis.topic(map.topic.id) as AnalysisSummary; setAnalysisResult(`已分析 ${result.processed} 份材料，新增 ${result.addedWorkstreams} 条工作线、${result.addedRelations} 条关系。`); await onRefresh() } catch (error) { setAnalysisResult(error instanceof Error ? error.message : '分析失败。') } finally { setAnalyzing(false); await refreshAnalysis() } }
-  const locate = () => { const node = layout.find((item) => item.id === locator); if (!flow || !node) { setMapNotice('请选择当前主题中的材料后再定位。'); return } setFocusedId(locator); setMapNotice(`已定位“${map.materials.find((item) => item.id === locator)?.title ?? ''}”。`); flow.setCenter(node.position.x + 80, node.position.y + 38, { zoom: 1, duration: 260 }); window.setTimeout(() => setFocusedId((current) => current === locator ? null : current), 1800) }
-  const relation = map.relations.find((item) => item.id === selectedEdge)
-  return <section className="topic-view">
-    <div className="topic-toolbar"><div><span className="view-pill"><Network size={14}/>主题地图</span><p>自由画布：拖动卡片组织思路，从卡片两侧端口拉线创建关联。</p></div><button className="secondary-button" disabled={analyzing || analysis.running > 0 || map.materials.length < 2} onClick={() => void analyzeTopic()}><Sparkles size={15}/>{analyzing || analysis.running > 0 ? '分析中…' : '分析主题'}</button></div>
-    {(analysisResult || analysis.running || analysis.latestError) && <div className={`analysis-status ${analysis.latestError ? 'failed' : analysis.running ? 'running' : ''}`}>{analysis.running ? `AI 正在分析 ${analysis.running} 份材料…` : analysisResult ?? analysis.latestError}</div>}
-    <div className="whiteboard"><aside className="whiteboard-tools"><button className={tool === 'select' ? 'active' : ''} title="选择与拖动卡片" onClick={() => setTool('select')}><MousePointer2 size={19}/></button><button className={tool === 'pan' ? 'active' : ''} title="拖动画布" onClick={() => setTool('pan')}><Hand size={19}/></button><button className={tool === 'connect' ? 'active' : ''} title="创建关系连线" onClick={() => setTool('connect')}><Network size={19}/></button><hr/><button title="新建卡片" onClick={() => void createCard()}><Plus size={19}/></button><button title="定位材料" onClick={locate} disabled={!locator}><LocateFixed size={19}/></button><button title="适配全部视图" onClick={() => flow?.fitView({ padding: .16, duration: 240 })}><Maximize2 size={19}/></button><hr/><button title="撤销" disabled={!past.length} onClick={() => void undo()}><Undo2 size={19}/></button><button title="重做" disabled={!future.length} onClick={() => void redo()}><Redo2 size={19}/></button></aside><div className="whiteboard-stage"><div className="map-locator"><select value={locator} onChange={(event) => setLocator(event.target.value)}><option value="">选择材料定位</option>{map.materials.map((material) => <option key={material.id} value={material.id}>{material.title}</option>)}</select>{mapNotice && <span>{mapNotice}</span>}</div><div className="flow-map"><ReactFlow nodes={layout} edges={edges as Edge[]} nodeTypes={nodeTypes} minZoom={.2} maxZoom={2} panOnDrag={tool === 'pan'} nodesDraggable={tool === 'select'} onInit={(instance) => { setFlow(instance); window.requestAnimationFrame(() => instance.fitView({ padding: .16 })) }} onNodeClick={(_event, node) => { const material = map.materials.find((item) => item.id === node.id); if (material) onSelect(material) }} onEdgeClick={(_event, edge) => { const next = map.relations.find((item) => item.id === edge.id); setSelectedEdge(edge.id); setRelationLabel(next?.label ?? '') }} onConnect={(connection: Connection) => void createRelation(connection.source ?? '', connection.target ?? '')} onNodeDragStop={async (_event, node) => { const material = map.materials.find((item) => item.id === node.id); if (material) await window.materialMap.topics.positionMaterial(map.topic.id, material.id, node.position.x, node.position.y) }}><Background gap={18}/><Controls showInteractive={false}/></ReactFlow></div></div><aside className="whiteboard-inspector">{relation ? <><h3>关系</h3><label>关联名称<input value={relationLabel} onChange={(event) => setRelationLabel(event.target.value)} onBlur={() => void updateLabel()}/></label><p>{map.materials.find((item) => item.id === relation.sourceMaterialId)?.title} → {map.materials.find((item) => item.id === relation.targetMaterialId)?.title}</p><button className="danger-button" onClick={() => void deleteRelation()}><Trash2 size={15}/>删除关系</button></> : <><h3>主题画板</h3><p>点击加号新建卡片，或将工作台已有材料加入画板。拖动后的卡片位置会自动保存。</p><select value={source} onChange={(event) => setSource(event.target.value)}><option value="">加入已有材料</option>{materials.filter((material) => !map.materials.some((item) => item.id === material.id)).map((material) => <option key={material.id} value={material.id}>{material.title}</option>)}</select><button className="secondary-button" disabled={!source} onClick={() => void attach()}>加入画板</button></>}</aside></div>
-  </section>
+  return (
+    <div className="app-shell">
+      <Sidebar
+        workspace={workspace}
+        recentWorkspaces={recentWorkspaces}
+        topics={topics}
+        archivedTopics={archivedTopics}
+        activeTopicId={activeTopic?.topic.id ?? null}
+        showExplorer={showExplorer}
+        onShowWorkbench={() => { setActiveTopic(null); setSelected(null); setShowExplorer(false) }}
+        onShowExplorer={() => { setActiveTopic(null); setSelected(null); setShowExplorer(true) }}
+        onOpenTopic={(topic) => void openTopic(topic)}
+        onNewTopic={() => setShowTopic(true)}
+        onCreateWorkspace={() => void createWorkspace()}
+        onOpenWorkspace={() => void openWorkspace()}
+        onImportWorkspace={() => void importWorkspace()}
+        onOpenRecent={(root) => void openRecent(root)}
+        onCloseWorkspace={() => setWorkspace(null)}
+        onRestoreTopic={async (topic) => { await window.materialMap.topics.restore(topic.id); await refreshTopics(); setMessage(`已还原“${topic.name}”。`) }}
+        onDeleteArchivedTopic={async (topic) => {
+          if (!window.confirm(`永久删除主题“${topic.name}”的画板记录？原材料和文件不会删除。`)) return
+          await window.materialMap.topics.deleteArchived(topic.id)
+          await refreshTopics()
+        }}
+        onShowSources={() => setShowSources(true)}
+        onShowSettings={() => setShowSettings(true)}
+        onExportWorkspace={() => void exportWorkspace()}
+      />
+      <main
+        className="main"
+        onDragOver={(event) => event.preventDefault()}
+        onDrop={(event) => {
+          event.preventDefault()
+          const paths = [...event.dataTransfer.files].map((file) => window.materialMap.filePath(file)).filter(Boolean)
+          void importPaths(paths, false, activeTopic ? { topicId: activeTopic.topic.id, position: { x: 180, y: 140 } } : undefined)
+        }}
+      >
+        <header className="topbar">
+          <div>
+            {activeTopic ? (
+              <>
+                <button className="back-button" onClick={() => setActiveTopic(null)}><ArrowLeft size={17}/>工作台</button>
+                <h1>{activeTopic.topic.name}</h1>
+              </>
+            ) : showExplorer ? (
+              <>
+                <h1>探索</h1>
+                <p>读一份材料，查看有证据的关联材料。</p>
+              </>
+            ) : (
+              <>
+                <h1>工作台</h1>
+                <p>最近导入的材料，正在逐渐连成脉络。</p>
+              </>
+            )}
+          </div>
+          <div className="top-actions">
+            <label className="search">
+              <Search size={16}/>
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                onKeyDown={(event) => { if (event.key === 'Enter') askQuestion() }}
+                placeholder="搜索材料或主题"
+              />
+            </label>
+            {activeTopic && (
+              <button className="secondary-button" onClick={async () => {
+                if (!window.confirm(`归档主题“${activeTopic.topic.name}”？不会删除任何材料和文件。`)) return
+                await window.materialMap.topics.archive(activeTopic.topic.id)
+                setActiveTopic(null)
+                await refresh()
+                setMessage('主题已归档。')
+              }}><Archive size={15}/>归档主题</button>
+            )}
+            <button className="icon-button" title="基于本地材料提问" disabled={!query.trim()} onClick={askQuestion}><Bot size={18}/></button>
+            <button className="icon-button" title="导入文件" onClick={() => void importFiles()}><Upload size={18}/></button>
+            <button className="primary-button" onClick={() => setShowNote(true)}><Plus size={17}/>新建材料</button>
+          </div>
+        </header>
+        {imports.length > 0 && (
+          <ImportQueue items={imports} onRetry={(path, keepDuplicate) => void importPaths([path], keepDuplicate)} onClear={() => setImports([])}/>
+        )}
+        {answer && (
+          <section className="answer-panel">
+            <div className="answer-heading">
+              <span><Bot size={16}/>基于本地材料的回答</span>
+              <button className="icon-button" onClick={() => setAnswer(null)}><X size={15}/></button>
+            </div>
+            <p>{answer.answer}</p>
+            <div className="answer-meta">
+              {answer.confidence === 'grounded' ? '已基于本地证据' : '材料中没有足够证据'} · {answer.retrievalMode === 'fts' ? '全文检索' : answer.retrievalMode === 'hybrid' ? '混合检索' : '降级检索'}
+            </div>
+            {answer.citations.length > 0 && (
+              <div className="citations">
+                {answer.citations.map((citation) => (
+                  <button key={`${citation.materialId}:${citation.chunkId ?? 'material'}`} onClick={() => openExplorerById(citation.materialId)}>
+                    <FileText size={13}/>{citation.title}{citation.pageNumber ? ` · 第 ${citation.pageNumber} 页` : ''}
+                  </button>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
+        {activeTopic ? (
+          <TopicBoard
+            map={activeTopic}
+            materials={materials}
+            onRefresh={topicRefresh}
+            onSelect={setSelected}
+            onImportFiles={(paths, position) => importPaths(paths, false, { topicId: activeTopic.topic.id, position })}
+          />
+        ) : showExplorer ? (
+          <Explorer materials={materials} topics={topics} initialMaterialId={explorerMaterialId} onSelect={(material) => setExplorerMaterialId(material.id)} onChanged={refresh}/>
+        ) : (
+          <Workbench
+            materials={materials.filter((item) => !query || `${item.title} ${item.excerpt ?? ''} ${(materialTopics[item.id] ?? []).map((topic) => topic.name).join(' ')}`.toLowerCase().includes(query.toLowerCase()))}
+            materialTopics={materialTopics}
+            topics={topics}
+            onSelect={openInExplorer}
+            onContext={(material, x, y) => setContextMenu({ material, x, y })}
+            onImport={importFiles}
+            onLink={() => setShowLink(true)}
+            onDemo={() => void createDemo()}
+            onCreateTopic={createTopicFromMaterials}
+          />
+        )}
+      </main>
+      {selected && !showExplorer && (
+        <ContextPanel material={selected} topics={topics} activeTopic={activeTopic} onClose={() => setSelected(null)} onRefresh={activeTopic ? topicRefresh : refresh} onOpenTopic={openTopic}/>
+      )}
+      {showSources && <SourcePanel onClose={() => setShowSources(false)} onChanged={refresh}/>}
+      {showNote && (
+        <NoteDialog onClose={() => setShowNote(false)} onSave={async (title, text, format) => {
+          if (format === 'note') await window.materialMap.materials.note(title, text)
+          else await window.materialMap.materials.document(title, text, format)
+          setShowNote(false)
+          await refresh()
+        }}/>
+      )}
+      {showLink && (
+        <LinkDialog onClose={() => setShowLink(false)} onSave={async (url) => {
+          await window.materialMap.materials.link(url)
+          setShowLink(false)
+          await refresh()
+        }}/>
+      )}
+      {showTopic && (
+        <TopicDialog onClose={() => setShowTopic(false)} onSave={async (name, description) => {
+          const topic = await window.materialMap.topics.create(name, description) as Topic
+          setShowTopic(false)
+          await refresh()
+          void openTopic(topic)
+        }}/>
+      )}
+      {showSettings && <SettingsDialog topicId={activeTopic?.topic.id} onClose={() => setShowSettings(false)}/>}
+      {contextMenu && (
+        <MaterialMenu
+          material={contextMenu.material}
+          x={contextMenu.x}
+          y={contextMenu.y}
+          onClose={() => setContextMenu(null)}
+          onOpen={() => setSelected(contextMenu.material)}
+          onRefresh={refresh}
+          onMessage={setMessage}
+        />
+      )}
+      <Toast message={message} onClose={() => setMessage('')}/>
+    </div>
+  )
 }
-
-function MaterialMenu({ material, x, y, onClose, onOpen, onRefresh, onMessage }: { material: Material; x:number; y:number; onClose(): void; onOpen(): void; onRefresh(): Promise<void>; onMessage(message:string): void }): React.ReactElement { const editable = material.type === 'note' || material.type === 'document' || (material.type === 'file' && /\.(md|txt|csv|json|html?)$/i.test(material.sourcePath ?? material.storedPath ?? '')); const act = async (action: () => Promise<unknown>, message: string) => { try { await action(); await onRefresh(); onMessage(message) } catch (error) { onMessage(error instanceof Error ? error.message : '操作失败。') } finally { onClose() } }; return <div className="material-menu" style={{ left: x, top: y }} onMouseLeave={onClose}><button onClick={() => { onOpen(); onClose() }}>{editable ? '编辑内容' : '查看材料'}</button><button onClick={() => void act(() => window.materialMap.materials.open(material.id), '已交给默认程序打开。')}>{material.type === 'link' ? '打开链接' : '用默认程序打开'}</button><button onClick={() => { const title = window.prompt('材料名称', material.title); if (title?.trim()) void act(() => window.materialMap.materials.rename(material.id, title), '材料已重命名。') }}>重命名</button>{material.sourcePath && <button onClick={() => void act(() => window.materialMap.materials.importNewVersion(material.id), '已导入为新版本。')}>导入为新版本</button>}<button className="danger" onClick={() => { if (window.confirm(`删除“${material.title}”？原始导入文件不会被删除。`)) void act(() => window.materialMap.materials.delete(material.id), '材料已删除。') }}>删除材料</button></div> }
-function LegacyMaterialPreview({ material, text }: { material: Material; text: string }): React.ReactElement { const extension = (material.sourcePath ?? material.storedPath ?? '').split('.').pop()?.toLowerCase(); if (extension === 'html' || extension === 'htm') return <iframe className="document-preview-frame" sandbox="" title="HTML preview" srcDoc={text}/>; if (extension === 'json') { try { return <pre>{JSON.stringify(JSON.parse(text || '{}'), null, 2)}</pre> } catch { return <pre className="preview-error">JSON 格式无效</pre> } }; if (extension === 'csv') return <pre>{text}</pre>; return <pre>{text}</pre> }
-function ContextPanel({ material, topics, activeTopic, onClose, onRefresh, onOpenTopic }: { material: Material; topics: Topic[]; activeTopic: TopicMap | null; onClose(): void; onRefresh(): Promise<void>; onOpenTopic(topic: Topic): void }): React.ReactElement { const [adding, setAdding] = useState(false); const [memberships, setMemberships] = useState<Topic[]>([]); const [editing, setEditing] = useState(false); const [title, setTitle] = useState(material.title); const [text, setText] = useState(material.extractedText ?? ''); const [saved, setSaved] = useState(true); const editable = material.type === 'note' || material.type === 'document' || (material.type === 'file' && /\.(md|txt|csv|json|html?)$/i.test(material.sourcePath ?? material.storedPath ?? '')); const loadMemberships = () => void window.materialMap.topics.forMaterial(material.id).then((items: unknown[]) => setMemberships(items as Topic[])); useEffect(() => { setTitle(material.title); setText(material.extractedText ?? ''); setEditing(false); setSaved(true); loadMemberships() }, [material.id]); const save = async () => { await window.materialMap.materials.saveText(material.id, title, text); setSaved(true); setEditing(false); await onRefresh() }; const addToTopic = async (topicId: string) => { await window.materialMap.topics.addMaterial(topicId, material.id); setAdding(false); await onRefresh(); loadMemberships(); const topic = topics.find((item) => item.id === topicId); if (topic) onOpenTopic(topic) }; return <aside className={`context-panel ${editing ? 'editing' : ''}`}><header><div className={`material-type ${material.type}`}>{materialIcon(material.type)}<span>{material.type}</span></div><button className="icon-button" onClick={onClose}><X size={18}/></button></header>{editing ? <><input className="editor-title" value={title} onChange={(event) => { setTitle(event.target.value); setSaved(false) }}/><div className="document-editor"><section><span>编辑</span><textarea className="material-editor" value={text} onChange={(event) => { setText(event.target.value); setSaved(false) }}/></section><section><span>预览</span><div className="document-preview"><MaterialPreview material={material} text={text}/></div></section></div><div className="editor-actions"><button className="secondary-button" onClick={() => setEditing(false)}>取消</button><button className="primary-button" disabled={saved} onClick={() => void save()}>保存</button></div></> : <><h2>{material.title}</h2><div className="panel-meta"><span><Clock3 size={14}/>{toDay(material.occurredAt)}</span></div><div className="preview"><p>{material.extractedText || material.excerpt || material.error || '材料仍在等待处理。'}</p></div><div className="panel-actions">{editable ? <button className="secondary-button" onClick={() => setEditing(true)}>编辑内容</button> : <button className="secondary-button" onClick={() => void window.materialMap.materials.open(material.id)}>用默认程序打开</button>}</div></>}{material.error && <button className="retry-button" onClick={async () => { await window.materialMap.materials.retry(material.id); await onRefresh() }}><LoaderCircle size={15}/>重新处理</button>}<section className="panel-section"><div className="panel-section-title"><h3>所在主题</h3><button onClick={() => setAdding(!adding)}><Plus size={15}/></button></div>{adding && <div className="topic-picker">{topics.map((topic) => <button key={topic.id} onClick={() => void addToTopic(topic.id)}>{topic.name}</button>)}</div>}{memberships.length ? <div className="relationship-list">{memberships.map((topic) => <button className="relationship" key={topic.id} onClick={() => onOpenTopic(topic)}><Map size={14}/><span>{topic.name}</span></button>)}</div> : <p className="panel-empty">尚未加入主题</p>}</section>{activeTopic && <BoardAttributes topic={activeTopic} material={material} onRefresh={onRefresh}/>}<section className="panel-section"><h3>时间</h3><input className="date-input" type="date" defaultValue={material.occurredAt?.slice(0, 10)} onChange={async (event) => { if (event.target.value) { await window.materialMap.materials.date(material.id, `${event.target.value}T00:00:00.000Z`); await onRefresh() } }}/></section></aside> }
-function NoteDialog({ onClose, onSave }: { onClose(): void; onSave(title:string,text:string,format:'note'|'md'|'txt'|'csv'|'json'|'html'): void }): React.ReactElement { const [title,setTitle]=useState(''); const [text,setText]=useState(''); const [format,setFormat]=useState<'note'|'md'|'txt'|'csv'|'json'|'html'>('note'); return <Modal title="新建材料" onClose={onClose}><label>材料类型<select value={format} onChange={(e)=>setFormat(e.target.value as typeof format)}><option value="note">笔记</option><option value="md">Markdown 文档</option><option value="txt">纯文本文件</option><option value="csv">CSV 文件</option><option value="json">JSON 文件</option><option value="html">HTML 文件</option></select></label><input autoFocus value={title} onChange={(e)=>setTitle(e.target.value)} placeholder="材料标题"/><textarea value={text} onChange={(e)=>setText(e.target.value)} placeholder="输入或粘贴内容…"/><button className="primary-button" disabled={!title.trim()} onClick={()=>onSave(title,text,format)}>创建并保存</button></Modal> }
-function LinkDialog({ onClose, onSave }: { onClose(): void; onSave(url:string): void }): React.ReactElement { const [url,setUrl]=useState(''); return <Modal title="添加链接" onClose={onClose}><input autoFocus value={url} onChange={(e)=>setUrl(e.target.value)} placeholder="https://example.com"/><button className="primary-button" disabled={!/^https?:\/\//.test(url)} onClick={()=>onSave(url)}>添加并解析</button></Modal> }
-function TopicDialog({ onClose, onSave }: { onClose(): void; onSave(name:string,description:string): void }): React.ReactElement { const [name,setName]=useState(''); const [description,setDescription]=useState(''); return <Modal title="新建主题" onClose={onClose}><input autoFocus value={name} onChange={(e)=>setName(e.target.value)} placeholder="主题名称"/><textarea value={description} onChange={(e)=>setDescription(e.target.value)} placeholder="这个主题想梳理什么？"/><button className="primary-button" disabled={!name.trim()} onClick={()=>onSave(name,description)}>创建主题</button></Modal> }
-function SettingsDialog({ onClose, topicId }: { onClose(): void; topicId?: string }): React.ReactElement {
-  const [settings, setSettings] = useState<ModelSettings>({ profileId: null, provider: 'compatible', baseUrl: '', chatModel: '', embeddingModel: '', allowCloud: false, enabled: false })
-  const [profiles, setProfiles] = useState<ProviderProfile[]>([])
-  const [draft, setDraft] = useState({ id: undefined as string | undefined, name: '', provider: 'compatible' as ModelSettings['provider'], wireApi: 'chat_completions' as 'chat_completions'|'responses', baseUrl: '', apiKey: '' })
-  const [result, setResult] = useState('')
-  const refreshProfiles = async () => setProfiles(await window.materialMap.profiles.list())
-  useEffect(() => { void Promise.all([window.materialMap.settings.get(), window.materialMap.profiles.list()]).then(([next, list]) => { setSettings(next); setProfiles(list) }) }, [])
-  const update = <K extends keyof ModelSettings>(key: K, value: ModelSettings[K]) => setSettings((old) => ({ ...old, [key]: value }))
-  const apply = async (profile: ProviderProfile) => { const next = { ...settings, profileId: profile.id, provider: profile.provider, baseUrl: profile.baseUrl, chatModel: profile.recommendedModel ?? '', enabled: true }; await window.materialMap.settings.save(next); setSettings(next); setResult(`已应用“${profile.name}”，系统自动选择 ${profile.recommendedModel ?? '可用模型'}。`) }
-  const edit = (profile: ProviderProfile) => setDraft({ id: profile.id, name: profile.name, provider: profile.provider, wireApi: profile.wireApi, baseUrl: profile.baseUrl, apiKey: '' })
-  const save = async () => { try { const profile = await window.materialMap.profiles.save({ ...draft, apiKey: draft.apiKey || undefined }) as ProviderProfile; await apply(profile); setDraft({ id: undefined, name: '', provider: 'compatible', wireApi: 'chat_completions', baseUrl: '', apiKey: '' }); await refreshProfiles() } catch (error) { setResult(error instanceof Error ? error.message : '无法发现可用模型，配置未保存。') } }
-  return <Modal title="模型与隐私" onClose={onClose}><section className="profile-list"><h3>已保存的 AI 配置</h3>{profiles.length ? profiles.map((profile) => <div key={profile.id} className={profile.id === settings.profileId ? 'active' : ''}><button onClick={() => void apply(profile)}><strong>{profile.name}</strong><small>{profile.recommendedModel ?? '尚未发现模型'}</small></button><button className="icon-button" title="编辑配置" onClick={() => edit(profile)}><Pencil size={14}/></button><button className="icon-button" title="删除配置" onClick={() => void window.materialMap.profiles.delete(profile.id).then(refreshProfiles)}><Trash2 size={14}/></button></div>) : <p>还没有可用的 AI 配置。</p>}</section><section className="profile-create"><h3>{draft.id ? '编辑 AI 配置' : '创建 AI 配置'}</h3><label>配置名称<input value={draft.name} onChange={(event) => setDraft((old) => ({ ...old, name: event.target.value }))} placeholder="例如：公司 OpenAI 网关"/></label><label>服务协议<select value={draft.provider} onChange={(event) => setDraft((old) => ({ ...old, provider: event.target.value as ModelSettings['provider'] }))}><option value="compatible">OpenAI 兼容</option><option value="ollama">本机 Ollama</option><option value="anthropic">Anthropic Claude</option><option value="gemini">Google Gemini</option></select></label><label>服务地址<input value={draft.baseUrl} onChange={(event) => setDraft((old) => ({ ...old, baseUrl: event.target.value }))} placeholder="https://api.example.com/v1"/></label>{draft.provider !== 'ollama' && <label>API Key<input type="password" value={draft.apiKey} onChange={(event) => setDraft((old) => ({ ...old, apiKey: event.target.value }))} placeholder={draft.id ? '留空以保留当前 API Key' : '粘贴 API Key'}/></label>}<p className="dialog-note">保存时会自动发现服务商可用模型并选择推荐的最新模型。</p><button className="primary-button" disabled={!draft.name.trim() || !draft.baseUrl.trim() || (draft.provider !== 'ollama' && !draft.id && !draft.apiKey.trim())} onClick={() => void save()}>{draft.id ? '更新并保存' : '发现模型并保存'}</button></section>{draft.provider !== 'ollama' && <label className="checkbox"><input type="checkbox" checked={settings.allowCloud} onChange={(event) => update('allowCloud', event.target.checked)}/>我理解分析文本会发送到外部服务</label>}<label className="checkbox"><input type="checkbox" checked={settings.enabled} onChange={(event) => update('enabled', event.target.checked)}/>开启自动分析</label><div className="dialog-actions"><button className="secondary-button" disabled={!settings.profileId} onClick={async () => { const steps = await window.materialMap.settings.validate(settings, topicId); setResult(steps.map((step: { ok: boolean; id: string; detail: string }) => `${step.ok ? '通过' : '失败'} ${step.id}：${step.detail}`).join('\n')) }}>验证当前 AI</button></div>{result && <p className="result-text">{result}</p>}</Modal>
-}
-function Modal({ title, onClose, children }: { title:string; onClose():void; children:React.ReactNode }): React.ReactElement { return <div className="modal-backdrop"><section className="modal"><header><h2>{title}</h2><button className="icon-button" onClick={onClose}><X size={18}/></button></header><div className="modal-body">{children}</div></section></div> }

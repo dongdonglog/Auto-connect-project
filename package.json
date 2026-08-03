@@ -8,8 +8,9 @@
     "build": "electron-vite build",
     "package": "npm run build && electron-builder --win nsis portable",
     "preview": "electron-vite preview",
-    "test": "vitest run",
+    "test": "vitest run src/main src/renderer/src",
     "test:e2e": "npm run build && vitest run src/e2e",
+    "benchmark": "esbuild scripts/benchmark.ts --bundle --platform=node --format=cjs --packages=external --outfile=node_modules/.cache/benchmark.cjs && node node_modules/.cache/benchmark.cjs",
     "test:watch": "vitest"
   },
   "dependencies": {

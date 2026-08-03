@@ -51,6 +51,21 @@ export interface MaterialChunk {
   hash: string
   indexedAt: string
 }
+export interface MaterialTag { materialId: string; tag: string; source: 'title' | 'heading' | 'phrase'; weight: number }
+export type EntityType = 'file_reference' | 'technology' | 'project'
+export type EntityMentionSource = 'filename' | 'title' | 'heading' | 'body' | 'link' | 'import'
+export interface Entity { id: string; text: string; normalized: string; type: EntityType; weight: number }
+export interface EntityMention { id: string; entityId: string; materialId: string; source: EntityMentionSource; startOffset: number | null; endOffset: number | null; excerpt: string }
+export type MaterialRelationStatus = 'visible' | 'hidden' | 'fixed'
+export interface RelationshipEvidence { id: string; relationId: string; type: 'explicit_reference' | 'entity_overlap' | 'structural'; score: number; sourceMaterialId: string; targetMaterialId: string; sourceEntityId: string | null; targetEntityId: string | null; sourceOffset: number | null; targetOffset: number | null; text: string; createdAt: string }
+export interface MaterialRelation { id: string; sourceMaterialId: string; targetMaterialId: string; score: number; relationType: 'references' | 'shares_entities' | 'nearby'; status: MaterialRelationStatus; updatedAt: string; target: Material; evidence: RelationshipEvidence[] }
+export interface RelationAiExplanation { supported: boolean; sourceMaterialId: string; targetMaterialId: string; relationType: string; label: string; explanation: string; confidence: number }
+export type RelationAiExplanationFailureReason = 'not-configured' | 'no-consent' | 'timeout' | 'invalid-json' | 'provider-error'
+// Single-relation explanation never writes to the workspace and never changes
+// relation state; failures are structured so the UI can distinguish causes.
+export type RelationAiExplanationResult = (RelationAiExplanation & { ok: true }) | { ok: false; reason: RelationAiExplanationFailureReason; message: string }
+export type TopicCandidateStatus = 'visible' | 'hidden' | 'accepted'
+export interface TopicRelationCandidateRecord { id: string; topicId: string; sourceMaterialId: string; targetMaterialId: string; sharedTags: string[]; score: number; status: TopicCandidateStatus; createdAt: string; updatedAt: string }
 export interface SearchHit {
   materialId: string
   chunkId: string | null
@@ -88,7 +103,7 @@ export interface Workstream { id: string; topicId: string; name: string; positio
 export interface Relation {
   id: string; sourceMaterialId: string; targetMaterialId: string; label: string; relationType: string
   evidenceText: string | null; evidenceMaterialId: string | null; confidence: number | null
-  createdBy: 'system' | 'ai' | 'manual'; createdAt: string; lineColor?: string | null; sourceArrow?: boolean; sourceArrowStyle?: ArrowStyle; targetArrowStyle?: ArrowStyle; animated?: boolean; archived?: boolean; branchIndex?: number; lineKind?: 'auto' | 'straight' | 'bezier' | 'orthogonal'
+  createdBy: 'system' | 'ai' | 'manual' | 'local'; createdAt: string; lineColor?: string | null; sourceArrow?: boolean; sourceArrowStyle?: ArrowStyle | null; targetArrowStyle?: ArrowStyle; animated?: boolean; archived?: boolean; branchIndex?: number; lineKind?: 'auto' | 'straight' | 'bezier' | 'orthogonal'; sourceHandle?: string | null; targetHandle?: string | null
 }
 export type ArrowStyle = 'none' | 'triangle' | 'open-triangle' | 'diamond'
 export interface Job { id: string; materialId: string; kind: string; status: JobStatus; error: string | null; updatedAt: string }
@@ -142,4 +157,5 @@ export interface TopicMap {
   materials: Array<Material & { workstreamId: string | null; canvasX: number | null; canvasY: number | null; positionSource: 'auto' | 'manual'; cardColor: string | null; cardTags: string[]; cardNote: string | null; sequence: number | null; sequenceSource: string; addedAt: string | null }>
   workstreams: Workstream[]
   relations: Relation[]
+  candidates: TopicRelationCandidateRecord[]
 }
