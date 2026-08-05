@@ -76,7 +76,7 @@ Material Map 不做一个「全自动知识图谱」，而是做一个**探索�
 
 ### 下载安装
 
-从 [Releases](https://github.com/your-org/material-map/releases) 页面下载最新安装包：
+从 [Releases](https://github.com/dongdonglog/Auto-connect-project/releases) 页面下载最新安装包：
 
 - **NSIS 安装版** (`Material-Map-Setup-x.x.x.exe`)：标准安装，支持自定义安装路径
 - **Portable 便携版** (`Material-Map-x.x.x.exe`)：解压即用，无需安装
@@ -104,8 +104,8 @@ Material Map 不做一个「全自动知识图谱」，而是做一个**探索�
 
 ```bash
 # 克隆仓库
-git clone https://github.com/your-org/material-map.git
-cd material-map
+git clone https://github.com/dongdonglog/Auto-connect-project.git
+cd Auto-connect-project
 
 # 安装依赖
 npm install
@@ -124,6 +124,19 @@ npm run dev
 | `npm run test:e2e` | 端到端测试（需先构建） |
 | `npm run build` | 生产构建 |
 | `npm run package` | 构建 + 打包 Windows 安装包 |
+
+### GitHub Actions 构建与发布
+
+仓库中的 `.github/workflows/windows-package.yml` 会在 `main`、`develop` 或 `feat/develop` 分支有新提交时，在 Windows Runner 上构建，并把安装包上传到对应的 Actions 运行记录中（保留 14 天）。
+
+要发布正式版本，给要发布的提交打一个 `v` 开头的标签：
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+标签构建成功后，工作流会自动创建 GitHub Release，并附上 NSIS 安装版、Portable 版及更新元数据。若 Release 创建权限被仓库策略禁止，请在 **Settings → Actions → General → Workflow permissions** 中允许工作流读写仓库内容。
 
 ## 技术栈
 
