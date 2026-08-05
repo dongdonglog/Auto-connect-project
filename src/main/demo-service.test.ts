@@ -21,7 +21,7 @@ describe('resetLearningPathDemo', () => {
     const map = workspace.topicMap(first.id)
     expect(map.materials).toHaveLength(7)
     expect(map.relations.filter((relation) => relation.createdBy === 'manual')).toHaveLength(6)
-    expect(map.relations.filter((relation) => relation.createdBy === 'ai')).toHaveLength(1)
+    expect(map.relations.filter((relation) => relation.createdBy === 'ai')).toHaveLength(0)
     const third = map.materials.find((item) => item.title.startsWith('核心概念'))!; const fourth = map.materials.find((item) => item.title.startsWith('实践项目'))!
     const path = map.relations.find((relation) => relation.sourceMaterialId === third.id && relation.targetMaterialId === fourth.id)
     expect(path).toMatchObject({ createdBy: 'manual', label: '下一步' })

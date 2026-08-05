@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
-import { Archive, ArrowLeft, Bot, FileText, Plus, Search, Upload, X } from 'lucide-react'
-import type { GroundedAnswer, Material, Topic, TopicMap, Workspace } from './types'
+import { Archive, ArrowLeft, Plus, Search, Upload } from 'lucide-react'
+import type { Material, Topic, TopicMap, Workspace } from './types'
 import { syncImportNotices, type ImportNotice } from './import-state'
 import { TopicBoardPage as TopicBoard } from './features/topics/TopicBoardPage'
 import { SourcePanel } from './features/sources/SourcePanel'
@@ -8,10 +8,11 @@ import { Welcome } from './components/Welcome'
 import { Sidebar } from './components/Sidebar'
 import { Workbench } from './components/Workbench'
 import { Explorer } from './components/Explorer'
+import { KnowledgeChatPage } from './features/workbench/KnowledgeChatPage'
 import { ContextPanel } from './components/ContextPanel'
 import { ImportQueue } from './components/ImportQueue'
 import { MaterialMenu } from './components/MaterialMenu'
-import { LinkDialog, NoteDialog, SettingsDialog, TopicDialog, WorkspaceDialog } from './components/Dialogs'
+import { LinkDialog, NoteDialog, SettingsDialog, TopicDialog, WorkspaceDialog, WorkspacePasswordDialog } from './components/Dialogs'
 import { Toast } from './components/Toast'
 
 export default function App(): React.ReactElement {
@@ -23,16 +24,18 @@ export default function App(): React.ReactElement {
   const [archivedTopics, setArchivedTopics] = useState<Topic[]>([])
   const [selected, setSelected] = useState<Material | null>(null)
   const [showExplorer, setShowExplorer] = useState(false)
+  const [showChat, setShowChat] = useState(false)
   const [explorerMaterialId, setExplorerMaterialId] = useState<string | null>(null)
   const [activeTopic, setActiveTopic] = useState<TopicMap | null>(null)
   const [query, setQuery] = useState('')
-  const [answer, setAnswer] = useState<GroundedAnswer | null>(null)
   const [showNote, setShowNote] = useState(false)
   const [showLink, setShowLink] = useState(false)
   const [showTopic, setShowTopic] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
+  const [settingsRevision, setSettingsRevision] = useState(0)
   const [showSources, setShowSources] = useState(false)
   const [workspaceRoot, setWorkspaceRoot] = useState<string | null>(null)
+  const [passwordRequest, setPasswordRequest] = useState<{ kind: 'open' | 'import'; name: string; root?: string; file?: string; destination?: string } | null>(null)
   const [message, setMessage] = useState('')
   const [contextMenu, setContextMenu] = useState<{ material: Material; x: number; y: number } | null>(null)
   const [imports, setImports] = useState<ImportNotice[]>([])
@@ -92,6 +95,7 @@ export default function App(): React.ReactElement {
       setActiveTopic(await window.materialMap.topics.map(topic.id) as TopicMap)
       setSelected(null)
       setShowExplorer(false)
+      setShowChat(false)
     } catch (error) {
       setActiveTopic(null)
       setMessage(error instanceof Error ? `无法打开主题：${error.message}` : '无法打开主题。')
@@ -121,6 +125,8 @@ export default function App(): React.ReactElement {
     const root = await window.materialMap.chooseDirectory()
     if (!root) return
     try {
+      const info = await window.materialMap.workspace.inspect(root)
+      if (info.encrypted) { setPasswordRequest({ kind: 'open', name: info.name, root }); return }
       setWorkspace(await window.materialMap.workspace.open(root) as Workspace)
       await refreshRecent()
     } catch (error) {
@@ -133,6 +139,8 @@ export default function App(): React.ReactElement {
     const destination = await window.materialMap.chooseDirectory()
     if (!destination) return
     try {
+      const info = await window.materialMap.workspace.inspectPackage(file)
+      if (info.encrypted) { setPasswordRequest({ kind: 'import', name: info.name, file, destination }); return }
       setWorkspace(await window.materialMap.workspace.import(file, destination) as Workspace)
       await refreshRecent()
       setMessage('工作区已导入。')
@@ -142,6 +150,8 @@ export default function App(): React.ReactElement {
   }
   const openRecent = async (root: string) => {
     try {
+      const info = await window.materialMap.workspace.inspect(root)
+      if (info.encrypted) { setPasswordRequest({ kind: 'open', name: info.name, root }); return }
       setWorkspace(await window.materialMap.workspace.open(root) as Workspace)
       await refreshRecent()
     } catch {
@@ -160,9 +170,9 @@ export default function App(): React.ReactElement {
       const topic = await window.materialMap.demo.create() as Topic
       await refresh()
       await openTopic(topic)
-      setMessage('已创建 AI 关联演示，正在分析主题材料。')
+      setMessage('已创建学习路径演示。')
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '无法创建 AI 演示。')
+      setMessage(error instanceof Error ? error.message : '无法创建学习路径演示。')
     }
   }
   const createTopicFromMaterials = async (materialIds: string[]) => {
@@ -173,9 +183,17 @@ export default function App(): React.ReactElement {
     await refresh()
     setActiveTopic(await window.materialMap.topics.map(topic.id) as TopicMap)
     setSelected(null)
-    setMessage(`已将 ${materialIds.length} 份材料加入主题，默认拓扑已生成。需要补充关系时，请在画板中主动请求 AI。`)
+    setShowChat(false)
+    setMessage(`已将 ${materialIds.length} 份材料加入主题。可在画板中手动连接和整理。`)
   }
-  const askQuestion = () => { if (query.trim()) void window.materialMap.ask(query).then(setAnswer) }
+
+  const passwordDialog = passwordRequest && <WorkspacePasswordDialog title={passwordRequest.kind === 'open' ? '打开加密工作区' : '导入加密工作区'} name={passwordRequest.name} onClose={() => setPasswordRequest(null)} onSubmit={async (password) => {
+    const request = passwordRequest
+    if (request.kind === 'open' && request.root) setWorkspace(await window.materialMap.workspace.open(request.root, password) as Workspace)
+    if (request.kind === 'import' && request.file && request.destination) setWorkspace(await window.materialMap.workspace.import(request.file, request.destination, password) as Workspace)
+    setPasswordRequest(null)
+    await refreshRecent()
+  }}/>
 
   if (!workspace) {
     return (
@@ -192,9 +210,9 @@ export default function App(): React.ReactElement {
           <WorkspaceDialog
             root={workspaceRoot}
             onClose={() => setWorkspaceRoot(null)}
-            onSave={async (name) => {
+            onSave={async (name, password) => {
               try {
-                setWorkspace(await window.materialMap.workspace.create(workspaceRoot, name) as Workspace)
+                setWorkspace(await window.materialMap.workspace.create(workspaceRoot, name, password) as Workspace)
                 setWorkspaceRoot(null)
                 await refreshRecent()
               } catch (error) {
@@ -203,6 +221,7 @@ export default function App(): React.ReactElement {
             }}
           />
         )}
+        {passwordDialog}
         <Toast message={message} onClose={() => setMessage('')}/>
       </>
     )
@@ -220,6 +239,7 @@ export default function App(): React.ReactElement {
   const openExplorerById = (materialId: string) => {
     setExplorerMaterialId(materialId)
     setShowExplorer(true)
+    setShowChat(false)
     setSelected(null)
   }
   const openInExplorer = (material: Material) => openExplorerById(material.id)
@@ -233,8 +253,10 @@ export default function App(): React.ReactElement {
         archivedTopics={archivedTopics}
         activeTopicId={activeTopic?.topic.id ?? null}
         showExplorer={showExplorer}
-        onShowWorkbench={() => { setActiveTopic(null); setSelected(null); setShowExplorer(false) }}
-        onShowExplorer={() => { setActiveTopic(null); setSelected(null); setShowExplorer(true) }}
+        showChat={showChat}
+        onShowWorkbench={() => { setActiveTopic(null); setSelected(null); setShowExplorer(false); setShowChat(false) }}
+        onShowExplorer={() => { setActiveTopic(null); setSelected(null); setShowExplorer(true); setShowChat(false) }}
+        onShowChat={() => { setActiveTopic(null); setSelected(null); setShowExplorer(false); setShowChat(true) }}
         onOpenTopic={(topic) => void openTopic(topic)}
         onNewTopic={() => setShowTopic(true)}
         onCreateWorkspace={() => void createWorkspace()}
@@ -253,7 +275,7 @@ export default function App(): React.ReactElement {
         onExportWorkspace={() => void exportWorkspace()}
       />
       <main
-        className="main"
+        className={`main${showChat && !activeTopic && !showExplorer ? ' knowledge-chat-main' : ''}`}
         onDragOver={(event) => event.preventDefault()}
         onDrop={(event) => {
           event.preventDefault()
@@ -265,7 +287,7 @@ export default function App(): React.ReactElement {
           <div>
             {activeTopic ? (
               <>
-                <button className="back-button" onClick={() => setActiveTopic(null)}><ArrowLeft size={17}/>工作台</button>
+                <button className="back-button" onClick={() => { setActiveTopic(null); setShowChat(false) }}><ArrowLeft size={17}/>工作台</button>
                 <h1>{activeTopic.topic.name}</h1>
               </>
             ) : showExplorer ? (
@@ -273,6 +295,8 @@ export default function App(): React.ReactElement {
                 <h1>探索</h1>
                 <p>读一份材料，查看有证据的关联材料。</p>
               </>
+            ) : showChat ? (
+              <><h1>知识库问答</h1><p>从当前工作区材料中查找答案。</p></>
             ) : (
               <>
                 <h1>工作台</h1>
@@ -286,7 +310,6 @@ export default function App(): React.ReactElement {
               <input
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                onKeyDown={(event) => { if (event.key === 'Enter') askQuestion() }}
                 placeholder="搜索材料或主题"
               />
             </label>
@@ -299,7 +322,6 @@ export default function App(): React.ReactElement {
                 setMessage('主题已归档。')
               }}><Archive size={15}/>归档主题</button>
             )}
-            <button className="icon-button" title="基于本地材料提问" disabled={!query.trim()} onClick={askQuestion}><Bot size={18}/></button>
             <button className="icon-button" title="导入文件" onClick={() => void importFiles()}><Upload size={18}/></button>
             <button className="primary-button" onClick={() => setShowNote(true)}><Plus size={17}/>新建材料</button>
           </div>
@@ -307,37 +329,17 @@ export default function App(): React.ReactElement {
         {imports.length > 0 && (
           <ImportQueue items={imports} onRetry={(path, keepDuplicate) => void importPaths([path], keepDuplicate)} onClear={() => setImports([])}/>
         )}
-        {answer && (
-          <section className="answer-panel">
-            <div className="answer-heading">
-              <span><Bot size={16}/>基于本地材料的回答</span>
-              <button className="icon-button" onClick={() => setAnswer(null)}><X size={15}/></button>
-            </div>
-            <p>{answer.answer}</p>
-            <div className="answer-meta">
-              {answer.confidence === 'grounded' ? '已基于本地证据' : '材料中没有足够证据'} · {answer.retrievalMode === 'fts' ? '全文检索' : answer.retrievalMode === 'hybrid' ? '混合检索' : '降级检索'}
-            </div>
-            {answer.citations.length > 0 && (
-              <div className="citations">
-                {answer.citations.map((citation) => (
-                  <button key={`${citation.materialId}:${citation.chunkId ?? 'material'}`} onClick={() => openExplorerById(citation.materialId)}>
-                    <FileText size={13}/>{citation.title}{citation.pageNumber ? ` · 第 ${citation.pageNumber} 页` : ''}
-                  </button>
-                ))}
-              </div>
-            )}
-          </section>
-        )}
         {activeTopic ? (
           <TopicBoard
             map={activeTopic}
             materials={materials}
             onRefresh={topicRefresh}
-            onSelect={setSelected}
             onImportFiles={(paths, position) => importPaths(paths, false, { topicId: activeTopic.topic.id, position })}
           />
         ) : showExplorer ? (
           <Explorer materials={materials} topics={topics} initialMaterialId={explorerMaterialId} onSelect={(material) => setExplorerMaterialId(material.id)} onChanged={refresh}/>
+        ) : showChat ? (
+          <KnowledgeChatPage key={workspace.id} workspaceId={workspace.id} settingsRevision={settingsRevision} onConfigure={() => setShowSettings(true)} onOpenCitation={(citation) => openExplorerById(citation.materialId)}/>
         ) : (
           <Workbench
             materials={materials.filter((item) => !query || `${item.title} ${item.excerpt ?? ''} ${(materialTopics[item.id] ?? []).map((topic) => topic.name).join(' ')}`.toLowerCase().includes(query.toLowerCase()))}
@@ -379,7 +381,10 @@ export default function App(): React.ReactElement {
           void openTopic(topic)
         }}/>
       )}
-      {showSettings && <SettingsDialog topicId={activeTopic?.topic.id} onClose={() => setShowSettings(false)}/>}
+      {showSettings && (
+        <SettingsDialog topicId={activeTopic?.topic.id} onClose={() => { setShowSettings(false); setSettingsRevision((revision) => revision + 1) }}/>
+      )}
+      {passwordDialog}
       {contextMenu && (
         <MaterialMenu
           material={contextMenu.material}

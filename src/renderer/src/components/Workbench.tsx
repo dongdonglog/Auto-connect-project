@@ -1,7 +1,6 @@
 import { Link2, Sparkles, Upload } from 'lucide-react'
 import { useEffect, useState, type MouseEvent } from 'react'
 import type { Material, Topic } from '../types'
-import { KnowledgeChat } from '../features/workbench/KnowledgeChat'
 import { MaterialCard } from './MaterialCard'
 
 export interface WorkbenchProps {
@@ -42,7 +41,7 @@ export function Workbench({ materials, materialTopics, topics, onSelect, onConte
           <div>
             <button className="primary-button" onClick={onImport}><Upload size={17}/>导入文件</button>
             <button className="secondary-button" onClick={onLink}><Link2 size={17}/>添加链接</button>
-            <button className="secondary-button" onClick={onDemo}><Sparkles size={17}/>创建 AI 演示</button>
+            <button className="secondary-button" onClick={onDemo}><Sparkles size={17}/>创建学习路径演示</button>
           </div>
         </div>
       </section>
@@ -56,7 +55,7 @@ export function Workbench({ materials, materialTopics, topics, onSelect, onConte
           <p>材料完成分析后会自动补充摘要与关联。</p>
         </div>
         <div className="workbench-actions">
-          <button className="secondary-button" onClick={onDemo}><Sparkles size={15}/>创建 AI 演示</button>
+          <button className="secondary-button" onClick={onDemo}><Sparkles size={15}/>创建学习路径演示</button>
           <span>{filtered.length} 份材料</span>
         </div>
       </div>
@@ -96,7 +95,6 @@ export function Workbench({ materials, materialTopics, topics, onSelect, onConte
           <button className="secondary-button" disabled={currentPage === pageCount} onClick={() => setPage((value) => value + 1)}>下一页</button>
         </div>
       )}
-      <KnowledgeChat/>
     </section>
   )
 }

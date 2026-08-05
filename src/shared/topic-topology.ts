@@ -32,5 +32,5 @@ export function stableTopicOrder<T extends TopologyMaterial>(materials: T[]): T[
 
 export function topologyPositions(materials: TopologyMaterial[]): Array<{ materialId: string; x: number; y: number }> {
   const ordered = stableTopicOrder(materials)
-  return ordered.map((material, index) => ({ materialId: material.id, x: 120 + (index % 4) * 290, y: 120 + Math.floor(index / 4) * 180 }))
+  return ordered.map((material, index) => ({ materialId: material.id, x: 120 + (index % 4) * 340, y: 120 + Math.floor(index / 4) * 210 }))
 }

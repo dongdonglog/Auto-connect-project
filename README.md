@@ -157,7 +157,7 @@ npm run dev
 │  ├─ WorkspaceService            │
 │  │   └─ SQLite · FTS5 · Entity · Relation · Evidence
 │  ├─ AiService                   │
-│  │   └─ 问答 · 关系解释 · 提案  │
+│  │   └─ 问答 · 单条关系解释     │
 │  ├─ AppStore (模型配置 & 密钥)  │
 │  └─ chokidar (文件夹监听)       │
 └─────────────────────────────────┘
@@ -166,7 +166,7 @@ npm run dev
 关键模块：
 
 - `src/main/workspace-service.ts` — 工作区、迁移、索引、关系数据主服务
-- `src/main/ai-service.ts` — 带证据问答与 AI 补充关系编排
+- `src/main/ai-service.ts` — 带证据问答与单条关系解释
 - `src/shared/topic-topology.ts` — 主进程与画布共用的稳定排序与系统布局
 - `src/renderer/src/features/topics/` — 主题画板与关系交互
 - `src/renderer/src/features/workbench/` — 材料工作台
@@ -207,7 +207,7 @@ npm run dev
 - [x] 主题画板（React Flow + 四边端口 + 手动连线）
 - [x] 可选 AI 解释与实验问答
 - [x] 文件夹监听增量同步
-- [ ] 加密工作区 UI 接入
+- [x] 加密工作区 UI 接入
 - [ ] Windows NSIS/portable 安装包验收
 - [ ] 旧组件清理与 `App.tsx` 拆分
 - [ ] 大图性能压测与路由优化

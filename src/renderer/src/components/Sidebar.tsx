@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Archive, ChevronRight, FolderOpen, Map, Network, Plus, Search, Settings2, Trash2, Upload } from 'lucide-react'
+import { Archive, Bot, ChevronRight, FolderOpen, Map, Network, Plus, Search, Settings2, Trash2, Upload } from 'lucide-react'
 import type { Topic, Workspace } from '../types'
 import type { RecentWorkspace } from './Welcome'
 
@@ -10,8 +10,10 @@ export interface SidebarProps {
   archivedTopics: Topic[]
   activeTopicId: string | null
   showExplorer: boolean
+  showChat: boolean
   onShowWorkbench(): void
   onShowExplorer(): void
+  onShowChat(): void
   onOpenTopic(topic: Topic): void
   onNewTopic(): void
   onCreateWorkspace(): void
@@ -26,7 +28,7 @@ export interface SidebarProps {
   onExportWorkspace(): void
 }
 
-export function Sidebar({ workspace, recentWorkspaces, topics, archivedTopics, activeTopicId, showExplorer, onShowWorkbench, onShowExplorer, onOpenTopic, onNewTopic, onCreateWorkspace, onOpenWorkspace, onImportWorkspace, onOpenRecent, onCloseWorkspace, onRestoreTopic, onDeleteArchivedTopic, onShowSources, onShowSettings, onExportWorkspace }: SidebarProps): React.ReactElement {
+export function Sidebar({ workspace, recentWorkspaces, topics, archivedTopics, activeTopicId, showExplorer, showChat, onShowWorkbench, onShowExplorer, onShowChat, onOpenTopic, onNewTopic, onCreateWorkspace, onOpenWorkspace, onImportWorkspace, onOpenRecent, onCloseWorkspace, onRestoreTopic, onDeleteArchivedTopic, onShowSources, onShowSettings, onExportWorkspace }: SidebarProps): React.ReactElement {
   const [showWorkspaceMenu, setShowWorkspaceMenu] = useState(false)
   const [showArchived, setShowArchived] = useState(false)
   return (
@@ -47,8 +49,9 @@ export function Sidebar({ workspace, recentWorkspaces, topics, archivedTopics, a
         </div>
       )}
       <nav>
-        <button className={!activeTopicId && !showExplorer ? 'nav-item active' : 'nav-item'} onClick={onShowWorkbench}><Archive size={17}/>工作台</button>
+        <button className={!activeTopicId && !showExplorer && !showChat ? 'nav-item active' : 'nav-item'} onClick={onShowWorkbench}><Archive size={17}/>工作台</button>
         <button className={showExplorer ? 'nav-item active' : 'nav-item'} onClick={onShowExplorer}><Search size={17}/>探索</button>
+        <button className={showChat ? 'nav-item active' : 'nav-item'} onClick={onShowChat}><Bot size={17}/>知识库问答</button>
         <div className="nav-section">
           <span>主题</span>
           <button title="新建主题" onClick={onNewTopic}><Plus size={15}/></button>

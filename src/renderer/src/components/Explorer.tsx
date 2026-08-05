@@ -1,6 +1,7 @@
-import { Bot, EyeOff, FileText, Link2, Pin, Sparkles } from 'lucide-react'
+import { Bot, Eye, EyeOff, FileText, Link2, Pin, Sparkles } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { MaterialPreview } from '../MaterialPreview'
+import type { EvidenceFocus } from '../lib/evidence-focus'
 import type { Material, MaterialRelation, RelationAiExplanation, Topic } from '../types'
 import './explorer.css'
 
@@ -26,18 +27,20 @@ export function Explorer({ materials, topics, initialMaterialId, onSelect, onCha
   const [fixing, setFixing] = useState<MaterialRelation | null>(null)
   const [topicId, setTopicId] = useState('')
   const [newTopicName, setNewTopicName] = useState('')
+  const [showHidden, setShowHidden] = useState(false)
+  const [evidenceFocus, setEvidenceFocus] = useState<EvidenceFocus | null>(null)
   const selected = useMemo(() => materials.find((material) => material.id === selectedId) ?? null, [materials, selectedId])
-  useEffect(() => { if (initialMaterialId) setSelectedId(initialMaterialId) }, [initialMaterialId])
+  useEffect(() => { if (initialMaterialId) { setSelectedId(initialMaterialId); setEvidenceFocus(null) } }, [initialMaterialId])
   const loadRelations = async (materialId: string): Promise<void> => {
     setLoading(true)
     setLoadError('')
-    try { setRelations(await window.materialMap.materials.relations(materialId, 5)) }
+    try { setRelations(await window.materialMap.materials.relations(materialId, showHidden ? 20 : 5, showHidden)) }
     catch (error) { setRelations([]); setLoadError(error instanceof Error ? error.message : '无法读取材料关联。') }
     finally { setLoading(false) }
   }
-  useEffect(() => { if (!selected) { setRelations([]); return } void loadRelations(selected.id) }, [selected?.id])
-  const choose = (material: Material): void => { setSelectedId(material.id); setExpanded(null); setActionError(''); onSelect(material) }
-  const changeStatus = async (relation: MaterialRelation, status: 'hidden' | 'fixed'): Promise<void> => {
+  useEffect(() => { if (!selected) { setRelations([]); return } void loadRelations(selected.id) }, [selected?.id, showHidden])
+  const choose = (material: Material, focus: EvidenceFocus | null = null): void => { setSelectedId(material.id); setEvidenceFocus(focus?.materialId === material.id ? focus : null); setExpanded(null); setActionError(''); onSelect(material) }
+  const changeStatus = async (relation: MaterialRelation, status: 'visible' | 'hidden' | 'fixed'): Promise<void> => {
     setActionError('')
     try {
       if (status === 'fixed') await window.materialMap.materials.fixRelation(relation.id)
@@ -70,6 +73,18 @@ export function Explorer({ materials, topics, initialMaterialId, onSelect, onCha
     } catch (error) { setActionError(error instanceof Error ? error.message : 'AI 解释暂时不可用，本地证据仍可查看。') }
     finally { setExplaining(null) }
   }
+  const evidenceSource = (relation: MaterialRelation, materialId: string): Material => materialId === relation.target.id ? relation.target : materials.find((material) => material.id === materialId) ?? selected ?? relation.target
+  const focusFor = (item: MaterialRelation['evidence'][number], materialId: string): EvidenceFocus | null => {
+    const source = item.sourceMaterialId === materialId
+    const focus = { key: `${item.id}:${materialId}`, materialId, startOffset: source ? item.sourceOffset : item.targetOffset, endOffset: source ? item.sourceEndOffset ?? null : item.targetEndOffset ?? null, pageNumber: source ? item.sourcePageNumber ?? null : item.targetPageNumber ?? null, heading: source ? item.sourceHeading ?? null : item.targetHeading ?? null }
+    return focus.startOffset != null || focus.pageNumber != null || focus.heading != null ? focus : null
+  }
+  const evidenceLocation = (item: MaterialRelation['evidence'][number], materialId: string): string => {
+    const source = item.sourceMaterialId === materialId
+    const page = source ? item.sourcePageNumber : item.targetPageNumber
+    const offset = source ? item.sourceOffset : item.targetOffset
+    return page ? ` · 第 ${page} 页` : offset != null ? ` · 位置 ${offset}` : ''
+  }
   return (
     <section className="explorer-view">
       <aside className="explorer-list">
@@ -91,7 +106,7 @@ export function Explorer({ materials, topics, initialMaterialId, onSelect, onCha
               <p>{selected.sourcePath ?? selected.url ?? '工作区材料'}</p>
             </header>
             <div className="explorer-document">
-              <MaterialPreview material={selected} text={selected.extractedText ?? selected.excerpt ?? ''}/>
+              <MaterialPreview material={selected} text={selected.extractedText ?? selected.excerpt ?? ''} focus={evidenceFocus}/>
             </div>
           </>
         ) : <div className="explorer-empty">选择一份材料开始探索。</div>}
@@ -102,7 +117,7 @@ export function Explorer({ materials, topics, initialMaterialId, onSelect, onCha
             <h2>关联材料</h2>
             <p>本地即时计算，可展开查看证据。</p>
           </div>
-          <span>{relations.length}</span>
+          <button className={`hidden-toggle ${showHidden ? 'active' : ''}`} title={showHidden ? '只显示可见关系' : '显示已隐藏关系'} onClick={() => setShowHidden((value) => !value)}>{showHidden ? <Eye size={15}/> : <EyeOff size={15}/>}<span>{relations.length}</span></button>
         </header>
         {actionError && <p className="explorer-error" role="alert">{actionError}</p>}
         {fixing && (
@@ -145,17 +160,19 @@ export function Explorer({ materials, topics, initialMaterialId, onSelect, onCha
                 <div className="relation-actions">
                   <button title="查看证据" onClick={() => setExpanded(expanded === relation.id ? null : relation.id)}><Sparkles size={14}/></button>
                   <button title="固定到主题画板" disabled={relation.status === 'fixed'} onClick={() => setFixing(relation)}><Pin size={14}/></button>
-                  <button title="隐藏这条关联" onClick={() => void changeStatus(relation, 'hidden')}><EyeOff size={14}/></button>
+                  {relation.status === 'hidden'
+                    ? <button title="恢复显示这条关联" onClick={() => void changeStatus(relation, 'visible')}><Eye size={14}/></button>
+                    : <button title="隐藏这条关联" onClick={() => void changeStatus(relation, 'hidden')}><EyeOff size={14}/></button>}
                   <button title="AI 解释" disabled={explaining === relation.id} onClick={() => void explain(relation)}><Bot size={14}/></button>
                 </div>
                 {expanded === relation.id && (
                   <div className="relation-evidence">
                     {relation.evidence.map((item) => {
-                      const originTitle = item.sourceMaterialId === selected.id ? selected.title : relation.target.title
+                      const origin = evidenceSource(relation, item.sourceMaterialId)
                       return (
                         <div key={item.id} className="evidence-item">
                           <p>{item.text}</p>
-                          <small>来源：{originTitle}{item.sourceOffset != null ? ` · 位置 ${item.sourceOffset}` : ''}</small>
+                          <button className="evidence-source" title="在阅读器中定位原文" onClick={() => choose(origin, focusFor(item, origin.id))}>来源：{origin.title}{evidenceLocation(item, origin.id)}</button>
                         </div>
                       )
                     })}

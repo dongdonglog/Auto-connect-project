@@ -22,7 +22,7 @@ describe('WorkspaceService', () => {
     expect(service.listMaterialRelations(source.id)).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: relation.id })]))
     service.updateMaterialRelationStatus(relation.id, 'visible')
     const fixed = service.fixMaterialRelation(relation.id)
-    expect(fixed.createdBy).toBe('manual')
+    expect(fixed.createdBy).toBe('local')
     expect(service.listMaterialRelations(source.id).find((item) => item.id === relation.id)?.status).toBe('fixed')
   })
 
@@ -40,7 +40,7 @@ describe('WorkspaceService', () => {
     const source = service.listMaterials().find((material) => material.sourcePath === sourcePath)!
     const relation = service.listMaterialRelations(source.id).find((item) => item.target.id === target.id)!
     const evidence = relation.evidence.find((item) => item.type === 'explicit_reference')!
-    expect(evidence).toMatchObject({ sourceMaterialId: source.id, targetMaterialId: target.id, sourceOffset: sourceText.indexOf('./docs/details.md') })
+    expect(evidence).toMatchObject({ sourceMaterialId: source.id, targetMaterialId: target.id, sourceOffset: sourceText.indexOf('./docs/details.md'), sourceEndOffset: sourceText.indexOf('./docs/details.md') + './docs/details.md'.length, sourceHeading: 'Overview' })
     expect(evidence.text).toContain('docs/details.md')
 
     service.updateMaterialRelationStatus(relation.id, 'hidden')
@@ -64,8 +64,8 @@ describe('WorkspaceService', () => {
     const relation = service.listMaterialRelations(overview.id).find((item) => item.target.id === details.id)!
     const topic = service.createTopic('Storage')
     const fixed = service.fixMaterialRelation(relation.id, topic.id)
-    expect(fixed.createdBy).toBe('manual')
-    expect(service.topicMap(topic.id)).toMatchObject({ materials: expect.arrayContaining([expect.objectContaining({ id: overview.id }), expect.objectContaining({ id: details.id })]), relations: expect.arrayContaining([expect.objectContaining({ id: fixed.id })]) })
+    expect(fixed.createdBy).toBe('local')
+    expect(service.topicMap(topic.id)).toMatchObject({ materials: expect.arrayContaining([expect.objectContaining({ id: overview.id }), expect.objectContaining({ id: details.id })]), relations: expect.arrayContaining([expect.objectContaining({ id: fixed.id, createdBy: 'local', sourceArrowStyle: null, targetArrowStyle: 'triangle' })]) })
     expect(service.listMaterialRelations(overview.id).find((item) => item.id === relation.id)?.status).toBe('fixed')
   })
 
@@ -170,6 +170,33 @@ describe('WorkspaceService', () => {
     expect(service.topicMap(topic.id).materials[0]).toMatchObject({ id: material.id, canvasX: 418, canvasY: 236 })
   })
 
+  it('allows an unnamed one-way manual relation', async () => {
+    const service = new WorkspaceService()
+    await service.create(makeRoot(), 'Research')
+    const source = await service.createNote('Source', 'Source material')
+    const target = await service.createNote('Target', 'Target material')
+    const topic = service.createTopic('Board')
+    service.addMaterialsToTopic(topic.id, [source.id, target.id])
+    const relation = service.createRelation({ sourceMaterialId: source.id, targetMaterialId: target.id, label: '', relationType: 'related', evidenceText: null, evidenceMaterialId: null, confidence: null, createdBy: 'manual' })
+    service.updateRelationStyle(topic.id, relation.id, { sourceArrowStyle: 'none' })
+    expect(service.topicMap(topic.id).relations.find((item) => item.id === relation.id)).toMatchObject({ label: '', sourceArrowStyle: 'none', targetArrowStyle: 'triangle' })
+  })
+
+  it('preserves a source arrow explicitly enabled by the user', async () => {
+    const root = makeRoot()
+    const service = new WorkspaceService()
+    await service.create(root, 'Research')
+    const source = await service.createNote('Source', 'Source material')
+    const target = await service.createNote('Target', 'Target material')
+    const topic = service.createTopic('Board')
+    service.addMaterialsToTopic(topic.id, [source.id, target.id])
+    const relation = service.createRelation({ sourceMaterialId: source.id, targetMaterialId: target.id, label: '', relationType: 'related', evidenceText: null, evidenceMaterialId: null, confidence: null, createdBy: 'manual' })
+    service.updateRelationStyle(topic.id, relation.id, { sourceArrowStyle: 'triangle' })
+    service.close()
+    await service.open(root)
+    expect(service.topicMap(topic.id).relations.find((item) => item.id === relation.id)?.sourceArrowStyle).toBe('triangle')
+  })
+
   it('stores card and relation colors per topic without changing another topic', async () => {
     const service = new WorkspaceService()
     await service.create(makeRoot(), 'Research')
@@ -185,6 +212,115 @@ describe('WorkspaceService', () => {
     expect(service.topicMap(second.id).materials.find((item) => item.id === source.id)).toMatchObject({ cardColor: null, cardTags: [], cardNote: null })
     expect(service.topicMap(second.id).relations.find((item) => item.id === relation.id)?.lineColor).toBeNull()
     expect(() => service.updateCardStyle(first.id, source.id, { color: 'blue' })).toThrow('six-digit')
+  })
+
+  it('persists topic editor commands, card display overrides, and redo history across reopening', async () => {
+    const root = makeRoot()
+    const service = new WorkspaceService()
+    await service.create(root, 'Research')
+    const source = await service.createNote('Original title', 'Original material excerpt.')
+    const target = await service.createNote('Target', 'Target material')
+    const topic = service.createTopic('Board')
+    service.addMaterialsToTopic(topic.id, [source.id, target.id])
+
+    service.executeTopicEditorCommand(topic.id, { kind: 'moveCards', payload: { positions: [{ materialId: source.id, x: 320, y: 180 }] } })
+    service.executeTopicEditorCommand(topic.id, { kind: 'patchCard', payload: { materialId: source.id, patch: { displayTitle: 'Only on this board', displayExcerpt: 'Board-only summary', width: 300, height: 150, textColor: '#3568b8', fontSize: 16, collapsed: false, zIndex: 4, color: '#a14569' } } })
+    service.executeTopicEditorCommand(topic.id, { kind: 'createRelation', payload: { relation: { sourceMaterialId: source.id, targetMaterialId: target.id, label: '', relationType: 'related', style: { sourceArrowStyle: 'none', targetArrowStyle: 'triangle', lineWidth: 4, lineDash: 'solid', routePoints: [{ x: 280, y: 80 }] } } } })
+
+    expect(service.topicMap(topic.id).materials.find((material) => material.id === source.id)).toMatchObject({ title: 'Original title', displayTitle: 'Only on this board', displayExcerpt: 'Board-only summary', canvasX: 320, canvasY: 180, cardWidth: 300, cardHeight: 150, cardTextColor: '#3568b8', cardFontSize: 16, cardZIndex: 4, cardColor: '#a14569' })
+    expect(service.topicMap(topic.id).relations).toEqual(expect.arrayContaining([expect.objectContaining({ sourceMaterialId: source.id, targetMaterialId: target.id, label: '', sourceArrowStyle: 'none', targetArrowStyle: 'triangle', lineWidth: 4, lineDash: 'solid', routePoints: [{ x: 280, y: 80 }] })]))
+    expect(service.topicHistoryStatus(topic.id)).toMatchObject({ undo: true, redo: false, cursor: 3 })
+
+    service.undoTopicEditorCommand(topic.id)
+    expect(service.topicMap(topic.id).relations).toHaveLength(0)
+    service.redoTopicEditorCommand(topic.id)
+    service.close()
+    await service.open(root)
+    expect(service.topicHistoryStatus(topic.id)).toMatchObject({ undo: true, redo: false, cursor: 3 })
+    service.undoTopicEditorCommand(topic.id)
+    expect(service.topicMap(topic.id).relations).toHaveLength(0)
+    service.undoTopicEditorCommand(topic.id)
+    expect(service.topicMap(topic.id).materials.find((material) => material.id === source.id)).toMatchObject({ displayTitle: null, displayExcerpt: null, cardWidth: null, cardColor: null })
+  })
+
+  it('rolls back a failed editor command without leaving partial styles or history', async () => {
+    const service = new WorkspaceService(); await service.create(makeRoot(), 'Research')
+    const source = await service.createNote('Source', 'Source material')
+    const target = await service.createNote('Target', 'Target material')
+    const topic = service.createTopic('Board'); service.addMaterialsToTopic(topic.id, [source.id, target.id])
+
+    expect(() => service.executeTopicEditorCommand(topic.id, { kind: 'patchCard', payload: { materialId: source.id, patch: { displayTitle: 'Should not persist', color: 'invalid' } } })).toThrow('six-digit')
+    expect(service.topicMap(topic.id).materials.find((material) => material.id === source.id)).toMatchObject({ displayTitle: null, cardColor: null })
+    expect(service.topicHistoryStatus(topic.id)).toMatchObject({ cursor: 0, undo: false, redo: false })
+
+    expect(() => service.executeTopicEditorCommand(topic.id, { kind: 'createRelation', payload: { relation: { sourceMaterialId: source.id, targetMaterialId: target.id, style: { sourceHandle: 'in-left' } } } })).toThrow('Invalid out port')
+    expect(service.topicMap(topic.id).relations).toHaveLength(0)
+    expect(service.topicHistoryStatus(topic.id)).toMatchObject({ cursor: 0, undo: false, redo: false })
+  })
+
+  it('persists all four-side port combinations and keeps relation edits scoped to the topic', async () => {
+    const service = new WorkspaceService(); await service.create(makeRoot(), 'Research')
+    const source = await service.createNote('Source', 'Source material')
+    const target = await service.createNote('Target', 'Target material')
+    const topic = service.createTopic('Board'); const otherTopic = service.createTopic('Other')
+    service.addMaterialsToTopic(topic.id, [source.id, target.id])
+    service.addMaterialsToTopic(otherTopic.id, [source.id, target.id])
+    const relation = service.createRelation({ sourceMaterialId: source.id, targetMaterialId: target.id, label: '', relationType: 'related', evidenceText: null, evidenceMaterialId: null, confidence: null, createdBy: 'manual' })
+    const sides = ['left', 'top', 'right', 'bottom'] as const
+    for (const sourceSide of sides) for (const targetSide of sides) {
+      service.updateRelationStyle(topic.id, relation.id, { sourceHandle: `out-${sourceSide}`, targetHandle: `in-${targetSide}` })
+      expect(service.topicMap(topic.id).relations.find((item) => item.id === relation.id)).toMatchObject({ sourceHandle: `out-${sourceSide}`, targetHandle: `in-${targetSide}` })
+    }
+    expect(() => service.updateRelationStyle(otherTopic.id, relation.id, { lineWidth: 4 })).not.toThrow()
+    expect(service.topicMap(topic.id).relations.find((item) => item.id === relation.id)?.lineWidth).toBe(2.75)
+    expect(service.topicMap(otherTopic.id).relations.find((item) => item.id === relation.id)?.lineWidth).toBe(4)
+    expect(() => service.updateRelationStyle(topic.id, relation.id, { sourceHandle: 'in-left' })).toThrow('Invalid out port')
+  })
+
+  it('reconnects a formal relation as a directed edge and supports undo/redo', async () => {
+    const service = new WorkspaceService(); await service.create(makeRoot(), 'Research')
+    const source = await service.createNote('Source', 'Source material')
+    const target = await service.createNote('Target', 'Target material')
+    const topic = service.createTopic('Board'); service.addMaterialsToTopic(topic.id, [source.id, target.id])
+    service.executeTopicEditorCommand(topic.id, { kind: 'createRelation', payload: { relation: { sourceMaterialId: source.id, targetMaterialId: target.id, style: { sourceHandle: 'out-right', targetHandle: 'in-left' } } } })
+    const relation = service.topicMap(topic.id).relations[0]
+    service.executeTopicEditorCommand(topic.id, { kind: 'reconnectRelation', payload: { relationId: relation.id, sourceMaterialId: target.id, targetMaterialId: source.id, sourceHandle: 'out-bottom', targetHandle: 'in-top' } })
+    expect(service.topicMap(topic.id).relations[0]).toMatchObject({ sourceMaterialId: target.id, targetMaterialId: source.id, sourceHandle: 'out-bottom', targetHandle: 'in-top' })
+    service.undoTopicEditorCommand(topic.id)
+    expect(service.topicMap(topic.id).relations[0]).toMatchObject({ sourceMaterialId: source.id, targetMaterialId: target.id, sourceHandle: 'out-right', targetHandle: 'in-left' })
+    service.redoTopicEditorCommand(topic.id)
+    expect(service.topicMap(topic.id).relations[0]).toMatchObject({ sourceMaterialId: target.id, targetMaterialId: source.id, sourceHandle: 'out-bottom', targetHandle: 'in-top' })
+  })
+
+  it('keeps hidden Explorer relations hidden after a workspace restart', async () => {
+    const root = makeRoot(); const service = new WorkspaceService(); await service.create(root, 'Explorer')
+    const target = await service.createDocument('target.md', '# Target\nSQLite basics.', 'md')
+    const source = await service.createDocument('source.md', '# Source\nSee target.md for SQLite basics.', 'md')
+    const relation = service.listMaterialRelations(source.id).find((item) => item.target.id === target.id)!
+    service.updateMaterialRelationStatus(relation.id, 'hidden')
+    service.close(); await service.open(root)
+    expect(service.listMaterialRelations(source.id)).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: relation.id })]))
+    expect(service.listMaterialRelations(source.id, 20, true)).toEqual(expect.arrayContaining([expect.objectContaining({ id: relation.id, status: 'hidden' })]))
+  })
+
+  it('undoes a mixed card and relationship deletion as one editor operation', async () => {
+    const service = new WorkspaceService()
+    await service.create(makeRoot(), 'Research')
+    const first = await service.createNote('First', 'First material')
+    const second = await service.createNote('Second', 'Second material')
+    const third = await service.createNote('Third', 'Third material')
+    const topic = service.createTopic('Board')
+    service.addMaterialsToTopic(topic.id, [first.id, second.id, third.id])
+    const detached = service.createRelation({ sourceMaterialId: second.id, targetMaterialId: third.id, label: 'keep separate', relationType: 'related', evidenceText: null, evidenceMaterialId: null, confidence: null, createdBy: 'manual' })
+
+    service.executeTopicEditorCommand(topic.id, { kind: 'deleteSelection', payload: { materialIds: [first.id], relationIds: [detached.id] } })
+    expect(service.topicMap(topic.id).materials.map((material) => material.id)).not.toContain(first.id)
+    expect(service.topicMap(topic.id).relations.map((relation) => relation.id)).not.toContain(detached.id)
+    expect(service.topicHistoryStatus(topic.id).cursor).toBe(1)
+
+    service.undoTopicEditorCommand(topic.id)
+    expect(service.topicMap(topic.id).materials.map((material) => material.id)).toContain(first.id)
+    expect(service.topicMap(topic.id).relations.map((relation) => relation.id)).toContain(detached.id)
   })
 
   it('removes a material from a topic without deleting the material or its workspace data', async () => {
@@ -286,9 +422,25 @@ describe('WorkspaceService', () => {
     await service.createNote('Private note', 'This remains in the encrypted workspace.')
     expect(existsSync(join(root, 'workspace.sqlite.enc'))).toBe(true)
     const reopened = new WorkspaceService()
+    await reopened.create(join(makeRoot(), 'already-open'), 'Already open')
+    await reopened.createNote('Current note', 'Keep the active workspace usable.')
     await expect(reopened.open(root, 'wrong-password')).rejects.toThrow()
+    expect(reopened.search('active workspace')).toHaveLength(1)
     await reopened.open(root, 'correct-horse-battery-staple')
     expect(reopened.search('encrypted')).toHaveLength(1)
+  })
+
+  it('inspects and imports an encrypted workspace package only with its password', async () => {
+    const root = makeRoot(); const source = join(root, 'private-source'); const destination = join(root, 'private-import'); const packagePath = join(root, 'private.material-workspace')
+    const service = new WorkspaceService(); await service.create(source, 'Private package', 'correct-horse-battery-staple')
+    await service.createNote('Private note', 'This package remains encrypted.')
+    await service.exportPackage(packagePath)
+    await expect(service.inspectPackage(packagePath)).resolves.toEqual({ name: 'Private package', encrypted: true })
+    const imported = new WorkspaceService()
+    await expect(imported.importPackage(packagePath, destination, 'wrong-password')).rejects.toThrow()
+    await imported.importPackage(packagePath, destination, 'correct-horse-battery-staple')
+    expect(imported.summary()).toMatchObject({ name: 'Private package', encrypted: true })
+    expect(imported.search('encrypted')).toHaveLength(1)
   })
 
   it('saves workspace documents and creates a version when editing an imported text file', async () => {

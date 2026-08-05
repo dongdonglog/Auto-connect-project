@@ -27,6 +27,9 @@
 .flow-material-node {
   width: 220px;
   min-height: 116px;
+  box-sizing: border-box;
+  position: relative;
+  isolation: isolate;
   border: 1.5px solid var(--color-border-strong);
   border-radius: 12px;
   background: var(--color-surface);
@@ -40,6 +43,8 @@
   box-shadow: var(--shadow-md);
   transform: translateY(-2px);
 }
+.flow-material-node.collapsed { min-height: 72px !important; }
+.react-flow__node-material { z-index: 2; }
 .flow-material-node.focused {
   border-color: var(--color-primary);
   box-shadow: 0 0 0 4px var(--color-primary-ring), var(--shadow-md);
@@ -483,26 +488,55 @@
 
 /* 关系标签 */
 .relation-edge-label {
+  position: absolute;
+  top: 0;
+  left: 0;
   pointer-events: all;
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  min-height: 26px;
+  min-height: 18px;
   max-width: 210px;
-  padding: 4px 8px;
-  border: 1px solid var(--color-border-strong);
-  border-radius: 7px;
-  background: rgba(255, 255, 255, 0.97);
+  padding: 0 3px;
+  border: 0;
+  border-radius: 0;
+  background: #fff;
   color: #29465f;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 650;
+  line-height: 18px;
   white-space: nowrap;
-  box-shadow: var(--shadow-sm);
   cursor: pointer;
-  transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+  transition: color var(--dur) var(--ease), text-decoration-color var(--dur) var(--ease);
 }
-.relation-edge-label.selected { border-color: var(--color-primary); box-shadow: 0 0 0 2px var(--color-primary-ring); }
-.relation-edge-label.ai { border-style: dashed; color: #71899a; }
+.relation-edge-label.selected { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 3px; }
+.route-point-handle {
+  position: absolute;
+  pointer-events: all;
+  z-index: 5;
+  width: 12px;
+  height: 12px;
+  padding: 0;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: var(--color-primary);
+  box-shadow: 0 1px 4px rgba(18, 52, 80, .28);
+  cursor: move;
+}
+.relation-endpoint-handle {
+  position: absolute;
+  pointer-events: all;
+  z-index: 6;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: var(--color-primary);
+  box-shadow: 0 1px 5px rgba(18, 52, 80, .32);
+  cursor: crosshair;
+}
+.relation-endpoint-handle.target { background: #3568b8; }
+.relation-edge-label.ai { color: #71899a; }
 .relation-edge-label input {
   width: 120px;
   border: 1px solid var(--color-primary);
@@ -594,6 +628,8 @@
 
 /* 画板属性表单 */
 .board-attributes { display: flex; flex-direction: column; gap: 9px; }
+.board-attributes .panel-section-title { margin-bottom: 3px; }
+.board-attributes .panel-section-title span { color: var(--color-text-tertiary); font-size: 11px; }
 .board-attributes label { display: flex; flex-direction: column; gap: 5px; color: #52647c; font-size: 12px; }
 .board-attributes input, .board-attributes textarea {
   width: 100%;
@@ -610,10 +646,12 @@
   box-shadow: 0 0 0 3px var(--color-primary-ring);
 }
 .board-attributes textarea { min-height: 72px; resize: vertical; }
-.color-control { display: flex; align-items: center; gap: 6px; }
+.color-control { display: flex; align-items: center; gap: 7px; min-height: 30px; }
 .board-attributes .color-control input { width: 34px; height: 28px; padding: 2px; }
-.color-control button { width: 20px; height: 20px; padding: 0; border: 2px solid transparent; border-radius: 50%; }
+.color-control button { width: 22px; height: 22px; padding: 0; border: 2px solid transparent; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(22, 43, 67, .14); }
 .color-control button.active { border-color: #253b53; box-shadow: 0 0 0 2px #fff; }
+.board-attribute-actions { padding-top: 2px; }
+.board-attribute-actions .secondary-button { width: 100%; }
 .relation-color-input { width: 22px; height: 22px; padding: 0; border: 0; background: transparent; }
 
 /* 危险按钮 */

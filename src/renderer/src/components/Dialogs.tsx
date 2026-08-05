@@ -6,19 +6,37 @@ import { Modal } from './Modal'
 export interface WorkspaceDialogProps {
   root: string
   onClose(): void
-  onSave(name: string): void
+  onSave(name: string, password?: string): void
 }
 
 export function WorkspaceDialog({ root, onClose, onSave }: WorkspaceDialogProps): React.ReactElement {
   const [name, setName] = useState('我的材料')
+  const [encrypt, setEncrypt] = useState(false)
+  const [password, setPassword] = useState('')
+  const [confirm, setConfirm] = useState('')
+  const validPassword = !encrypt || (password.length >= 8 && password === confirm)
   return (
     <Modal title="创建工作区" onClose={onClose}>
       <p className="dialog-note">将在此文件夹中保存材料副本、索引和地图数据。</p>
       <input value={root} readOnly/>
       <input autoFocus value={name} onChange={(event) => setName(event.target.value)} placeholder="工作区名称"/>
-      <button className="primary-button" disabled={!name.trim()} onClick={() => onSave(name.trim())}>创建工作区</button>
+      <label className="dialog-checkbox"><input type="checkbox" checked={encrypt} onChange={(event) => setEncrypt(event.target.checked)}/>加密本地工作区</label>
+      {encrypt && <><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="设置至少 8 位密码"/><input type="password" value={confirm} onChange={(event) => setConfirm(event.target.value)} placeholder="再次输入密码"/>{confirm && password !== confirm && <p className="dialog-error">两次输入的密码不一致。</p>}</>}
+      <button className="primary-button" disabled={!name.trim() || !validPassword} onClick={() => onSave(name.trim(), encrypt ? password : undefined)}>创建工作区</button>
     </Modal>
   )
+}
+
+export function WorkspacePasswordDialog({ title, name, onClose, onSubmit }: { title: string; name: string; onClose(): void; onSubmit(password: string): Promise<void> }): React.ReactElement {
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  const submit = async (): Promise<void> => {
+    if (!password || busy) return
+    setBusy(true); setError('')
+    try { await onSubmit(password) } catch (reason) { setError(reason instanceof Error ? reason.message : '无法打开加密工作区。') } finally { setBusy(false) }
+  }
+  return <Modal title={title} onClose={onClose}><p className="dialog-note">“{name}”已加密。请输入工作区密码后继续。</p><input autoFocus type="password" value={password} onChange={(event) => setPassword(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void submit() }} placeholder="工作区密码"/>{error && <p className="dialog-error">{error}</p>}<button className="primary-button" disabled={!password || busy} onClick={() => void submit()}>{busy ? '正在打开…' : '继续'}</button></Modal>
 }
 
 export type NoteFormat = 'note' | 'md' | 'txt' | 'csv' | 'json' | 'html'
@@ -100,7 +118,11 @@ export function SettingsDialog({ onClose, topicId }: SettingsDialogProps): React
       setProfiles(list)
     })
   }, [])
-  const update = <K extends keyof ModelSettings>(key: K, value: ModelSettings[K]) => setSettings((old) => ({ ...old, [key]: value }))
+  const updateAndSave = <K extends keyof ModelSettings>(key: K, value: ModelSettings[K]): void => {
+    const next = { ...settings, [key]: value }
+    setSettings(next)
+    void window.materialMap.settings.save(next)
+  }
   const apply = async (profile: ProviderProfile) => {
     const next = { ...settings, profileId: profile.id, provider: profile.provider, baseUrl: profile.baseUrl, chatModel: profile.recommendedModel ?? '', enabled: true }
     await window.materialMap.settings.save(next)
@@ -153,11 +175,11 @@ export function SettingsDialog({ onClose, topicId }: SettingsDialogProps): React
       </section>
       {draft.provider !== 'ollama' && (
         <label className="checkbox">
-          <input type="checkbox" checked={settings.allowCloud} onChange={(event) => update('allowCloud', event.target.checked)}/>我理解分析文本会发送到外部服务
+          <input type="checkbox" checked={settings.allowCloud} onChange={(event) => updateAndSave('allowCloud', event.target.checked)}/>我理解材料文本会发送到外部服务
         </label>
       )}
       <label className="checkbox">
-        <input type="checkbox" checked={settings.enabled} onChange={(event) => update('enabled', event.target.checked)}/>开启自动分析
+        <input type="checkbox" checked={settings.enabled} onChange={(event) => updateAndSave('enabled', event.target.checked)}/>启用 AI 功能
       </label>
       <div className="dialog-actions">
         <button className="secondary-button" disabled={!settings.profileId} onClick={async () => {

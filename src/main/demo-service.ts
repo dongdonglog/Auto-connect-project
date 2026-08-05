@@ -34,7 +34,5 @@ export async function resetLearningPathDemo(workspace: WorkspaceService): Promis
     const sourceMaterialId = materials[index].id; const targetMaterialId = materials[index + 1].id
     workspace.createRelation({ sourceMaterialId, targetMaterialId, label: '下一步', relationType: 'next', evidenceText: '学习路径中的顺序依赖。', evidenceMaterialId: sourceMaterialId, confidence: 1, createdBy: 'manual' })
   }
-  const suggestion = workspace.createRelation({ sourceMaterialId: materials[1].id, targetMaterialId: materials[3].id, label: '实现', relationType: 'implements', evidenceText: '前置知识支撑实践项目。', evidenceMaterialId: materials[1].id, confidence: .8, createdBy: 'ai' })
-  workspace.updateRelationStyle(topic.id, suggestion.id, { color: '#7654a6', lineKind: 'bezier', targetArrowStyle: 'open-triangle' })
   return workspace.topicMap(topic.id).topic
 }

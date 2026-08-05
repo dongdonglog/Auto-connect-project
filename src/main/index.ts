@@ -2,10 +2,9 @@ import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, safeStorage, shel
 import { join } from 'node:path'
 import { WorkspaceService } from './workspace-service'
 import { AiService } from './ai-service'
-import type { ModelSettings, ProviderProfileInput } from './types'
+import type { KnowledgeQuestion, ModelSettings, ProviderProfileInput } from './types'
 import { AppStore } from './app-store'
 import { resetLearningPathDemo } from './demo-service'
-import { TopicMcpServer } from './topic-mcp'
 import { assertEnum, assertId, assertLimit, assertNumber, assertString, IpcValidationError } from './ipc-validation'
 
 const MATERIAL_RELATION_STATUSES = ['visible', 'hidden', 'fixed'] as const
@@ -14,7 +13,6 @@ let window: BrowserWindow | null = null
 const workspace = new WorkspaceService()
 let appStore: AppStore
 let ai: AiService
-const topicMcp = new TopicMcpServer((topicId) => workspace.topicMap(topicId))
 
 
 function createWindow(): void {
@@ -45,10 +43,12 @@ function registerIpc(): void {
   })
   ipcMain.handle('dialog:savePackage', async () => (await dialog.showSaveDialog({ defaultPath: 'workspace.material-workspace', filters: [{ name: 'Material Map workspace', extensions: ['material-workspace'] }] })).filePath ?? null)
   ipcMain.handle('workspace:create', async (_event, root: string, name: string, password?: string) => { const summary = await workspace.create(root, name, password); appStore.rememberWorkspace(summary.root, summary.name); return summary })
+  ipcMain.handle('workspace:inspect', (_event, root: string) => workspace.inspectWorkspace(root))
+  ipcMain.handle('workspace:inspectPackage', (_event, file: string) => workspace.inspectPackage(file))
   ipcMain.handle('workspace:open', async (_event, root: string, password?: string) => { const summary = await workspace.open(root, password); appStore.rememberWorkspace(summary.root, summary.name); return summary })
   ipcMain.handle('workspace:export', (_event, destination: string) => workspace.exportPackage(destination))
-  ipcMain.handle('workspace:import', async (_event, file: string, destination: string) => {
-    const summary = await workspace.importPackage(file, destination)
+  ipcMain.handle('workspace:import', async (_event, file: string, destination: string, password?: string) => {
+    const summary = await workspace.importPackage(file, destination, password)
     appStore.rememberWorkspace(summary.root, summary.name)
     return summary
   })
@@ -99,6 +99,13 @@ function registerIpc(): void {
   ipcMain.handle('topics:updateCardOrder', (_event, topicId: string, materialId: string, sequence: number) => workspace.updateCardOrder(assertId(topicId, '主题标识'), assertId(materialId, '材料标识'), assertNumber(sequence, '排序序号')))
   ipcMain.handle('topics:resetCardOrder', (_event, topicId: string) => workspace.resetCardOrder(assertId(topicId, '主题标识')))
   ipcMain.handle('topics:updateRelationStyle', (_event, topicId: string, relationId: string, input) => workspace.updateRelationStyle(assertId(topicId, '主题标识'), assertId(relationId, '关系标识'), input))
+  ipcMain.handle('topics:executeCommand', (_event, topicId: string, command) => {
+    if (!command || typeof command !== 'object' || Array.isArray(command) || !('kind' in command) || !('payload' in command) || !command.payload || typeof command.payload !== 'object' || Array.isArray(command.payload)) throw new IpcValidationError('画板编辑命令无效。')
+    return workspace.executeTopicEditorCommand(assertId(topicId, '主题标识'), { kind: assertString(command.kind, '命令类型', 48), payload: command.payload as Record<string, unknown> })
+  })
+  ipcMain.handle('topics:undo', (_event, topicId: string) => workspace.undoTopicEditorCommand(assertId(topicId, '主题标识')))
+  ipcMain.handle('topics:redo', (_event, topicId: string) => workspace.redoTopicEditorCommand(assertId(topicId, '主题标识')))
+  ipcMain.handle('topics:history', (_event, topicId: string) => workspace.topicHistoryStatus(assertId(topicId, '主题标识')))
   ipcMain.handle('relations:create', (_event, relation) => workspace.createRelation({ ...relation, sourceMaterialId: assertId(relation?.sourceMaterialId, '来源材料标识'), targetMaterialId: assertId(relation?.targetMaterialId, '目标材料标识'), label: assertString(relation?.label, '关系标签', 64) }))
   ipcMain.handle('relations:update', (_event, id: string, label: string) => workspace.updateRelation(id, label))
   ipcMain.handle('relations:delete', (_event, id: string) => workspace.deleteRelation(id))
@@ -119,12 +126,8 @@ function registerIpc(): void {
   ipcMain.handle('ai-config:clearLegacy', () => appStore.clearLegacyConfigs())
   ipcMain.handle('workspace:recent', () => appStore.listRecent())
   ipcMain.handle('workspace:forgetRecent', (_event, root: string) => appStore.forgetWorkspace(root))
-  ipcMain.handle('ai:analyze', (_event, topicId: string, materialId: string) => ai.analyze(topicId, materialId))
-  ipcMain.handle('ai:ask', (_event, question: string) => ai.ask(question))
+  ipcMain.handle('ai:ask', (_event, question: string | KnowledgeQuestion) => ai.ask(question))
   ipcMain.handle('ai:explainRelation', (_event, relationId: string) => ai.explainMaterialRelation(assertId(relationId, '关系标识')))
-  ipcMain.handle('ai:planTopicOperation', (_event, topicId: string, question: string) => ai.planTopicOperation(topicId, question))
-  ipcMain.handle('topic-tools:list', () => topicMcp.listTools())
-  ipcMain.handle('topic-tools:call', (_event, name: string, args: { topicId?: string; relations?: unknown; positions?: unknown; workstreams?: unknown }) => topicMcp.call(name, args))
 }
 
 function createMenu(): void {

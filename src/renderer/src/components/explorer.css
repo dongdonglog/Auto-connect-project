@@ -17,6 +17,8 @@
   color: var(--color-text-tertiary);
   margin: 3px 0 0;
 }
+.hidden-toggle { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-surface); color: var(--color-text-tertiary); padding: 5px 7px; font-size: 11px; }
+.hidden-toggle:hover, .hidden-toggle.active { border-color: #9fc8c3; color: var(--color-primary-hover); background: var(--color-primary-soft); }
 
 /* 左栏材料列表 */
 .explorer-list > div { padding: 8px; }
@@ -49,6 +51,21 @@
 .explorer-reader header p { font-size: 12px; color: var(--color-text-tertiary); margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .explorer-document { padding: 26px 34px; max-width: 900px; }
 .explorer-document .material-preview { max-width: none; }
+.evidence-locator {
+  margin: 0 0 20px;
+  padding: 12px 14px;
+  border: 1px solid #9fc8c3;
+  border-left: 3px solid var(--color-primary);
+  border-radius: 6px;
+  background: var(--color-primary-soft);
+  color: #35546a;
+}
+.evidence-locator header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 7px; }
+.evidence-locator strong { color: var(--color-primary-hover); font-size: 12px; }
+.evidence-locator header span { color: var(--color-text-tertiary); font-size: 10px; text-align: right; }
+.evidence-locator pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.65 var(--font-mono); }
+.evidence-locator mark,
+.evidence-text-preview mark { border-radius: 3px; background: #ffe58f; color: #27384b; box-shadow: 0 0 0 2px rgba(255, 213, 79, .35); }
 
 /* 右栏关系列表 */
 .relation-list { padding: 10px; }
@@ -144,7 +161,8 @@
 
 .evidence-item { margin-bottom: 6px; }
 .evidence-item p { margin: 0; }
-.evidence-item small { color: var(--color-text-tertiary, #8a8f98); font-size: 11px; }
+.evidence-source { border: 0; padding: 0; background: transparent; color: var(--color-text-tertiary, #8a8f98); font-size: 11px; text-align: left; }
+.evidence-source:hover { color: var(--color-primary-hover); text-decoration: underline; }
 .evidence-jump {
   margin-top: 4px;
   background: none;

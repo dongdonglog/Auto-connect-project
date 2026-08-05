@@ -1,4 +1,4 @@
-import type { AnalysisSummary, GroundedAnswer, MaterialAnalysisCard, ModelSettings, ProviderProfile, ProviderProfileInput, RelationAiExplanationFailureReason, RelationAiExplanationResult, TopicMap, TopicProposal, TopicRelationCandidate } from './types'
+import type { AnalysisSummary, GroundedAnswer, KnowledgeChatTurn, KnowledgeQuestion, Material, MaterialAnalysisCard, ModelSettings, ProviderProfile, ProviderProfileInput, RelationAiExplanationFailureReason, RelationAiExplanationResult, SearchHit, TopicMap, TopicProposal, TopicRelationCandidate } from './types'
 import { WorkspaceService } from './workspace-service'
 import { AppStore } from './app-store'
 import connectionSkill from './ai-skills/topic-connection.md?raw'
@@ -14,6 +14,22 @@ interface TopicAnalysisResult {
 
 const workflowRelations: Record<string, string> = { next: '下一步', depends_on: '依赖', explains: '解释', evidences: '佐证', implements: '实现', tests: '验证', blocks: '阻塞', improves: '改进', reviews: '复盘', references: '参考', related: '关联' }
 export interface AiActionProposal { id: string; kind: 'create_relation' | 'create_workstream' | 'delete_ai_relation' | 'rename_relation' | 'set_sequence' | 'set_card_style' | 'layout'; reason: string; evidence: string; materialId?: string; relationId?: string; payload?: Record<string, unknown> }
+
+const workspaceCatalogBudget = 24_000
+
+function workspaceCatalog(materials: Material[]): { hits: SearchHit[]; omitted: number } {
+  const hits: SearchHit[] = []
+  let used = 0
+  for (const material of materials) {
+    const summary = String(material.excerpt ?? material.extractedText ?? '').replace(/\s+/g, ' ').trim().slice(0, 320)
+    const text = `Type: ${material.type}; Status: ${material.status}; Summary: ${summary || '(no extracted summary)'}`
+    const cost = material.id.length + material.title.length + text.length + 20
+    if (hits.length && used + cost > workspaceCatalogBudget) break
+    hits.push({ materialId: material.id, chunkId: 'catalog', title: material.title.slice(0, 240), text, score: 1, sourcePath: material.sourcePath, pageNumber: null, heading: null, availability: material.availability })
+    used += cost
+  }
+  return { hits, omitted: Math.max(0, materials.length - hits.length) }
+}
 
 function parseJsonObject(text: string): Record<string, unknown> {
   const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim(); const start = cleaned.indexOf('{'); const end = cleaned.lastIndexOf('}')
@@ -139,25 +155,60 @@ export class AiService {
     }
   }
 
-  async ask(question: string): Promise<GroundedAnswer> {
-    const retrieval = await this.workspace.searchKnowledgeAsync(question, { limit: 8 })
-    const hits = retrieval.hits
-    const citations = hits.map((hit) => ({ id: hit.materialId, materialId: hit.materialId, chunkId: hit.chunkId, title: hit.title, excerpt: hit.text.slice(0, 360), sourcePath: hit.sourcePath, pageNumber: hit.pageNumber, heading: hit.heading }))
+  async ask(input: string | KnowledgeQuestion): Promise<GroundedAnswer> {
+    const question = (typeof input === 'string' ? input : input?.question ?? '').trim().slice(0, 2000)
+    if (!question) throw new Error('请输入要查询的问题。')
     const settings = this.workspace.getSettings()
-    if (!hits.length) {
-      const pending = (this.workspace.listJobs?.() ?? []).some((job) => job.status === 'running' || job.status === 'queued')
-      return { answer: pending ? '材料仍在建立索引，请稍候再提问。' : '当前本地材料中没有找到足够证据。', citations, confidence: 'insufficient-evidence', retrievalMode: 'fallback' }
-    }
-    if (!settings.enabled || !settings.chatModel) return { answer: `找到 ${hits.length} 段相关本地材料。请在模型设置中启用问答以生成带引用的回答。`, citations, confidence: 'grounded', retrievalMode: retrieval.mode }
-    if (settings.provider !== 'ollama' && !settings.allowCloud) throw new Error('Cloud question answering requires explicit consent in settings.')
-    const context = hits.map((hit) => `[${hit.materialId}:${hit.chunkId}] ${hit.title}\n${hit.text}`).join('\n\n')
-    const response = await this.chat(this.profileFor(settings), settings.chatModel, `Answer only from these local excerpts. Cite the supplied material IDs in square brackets. If the excerpts do not support an answer, say that evidence is insufficient.\n\nQuestion: ${question}\n\nMaterials:\n${context}`, false)
+    if (!settings.enabled || !settings.profileId || !settings.chatModel) throw new Error('请先在“模型与隐私”中添加并启用 AI 配置后再提问。')
+    const profile = this.appStore.getProfile(settings.profileId)
+    if (!profile || (profile.provider !== 'ollama' && !profile.hasApiKey)) throw new Error('当前 AI 配置不完整，请在“模型与隐私”中重新配置。')
+    if (profile.provider !== 'ollama' && !settings.allowCloud) throw new Error('请先在“模型与隐私”中确认允许将材料发送到外部 AI 服务。')
+    const history: KnowledgeChatTurn[] = (typeof input === 'string' || !Array.isArray(input.history) ? [] : input.history)
+      .filter((turn): turn is KnowledgeChatTurn => Boolean(turn) && (turn.role === 'user' || turn.role === 'assistant') && typeof turn.content === 'string')
+      .slice(-8)
+      .map((turn) => ({ role: turn.role, content: turn.content.trim().slice(0, 1200) }))
+      .filter((turn) => turn.content.length > 0)
+    const workspaceMaterials = this.workspace.listMaterials()
+    if (!workspaceMaterials.length) return { answer: '当前工作区还没有材料。', citations: [], confidence: 'insufficient-evidence', retrievalMode: 'fallback', model: null }
+    const previousQuestion = [...history].reverse().find((turn) => turn.role === 'user')?.content
+    const retrievalQuestion = previousQuestion ? `${previousQuestion}\n${question}` : question
+    const retrieval = await this.workspace.searchKnowledgeAsync(retrievalQuestion, { limit: 6 })
+    const catalog = workspaceCatalog(workspaceMaterials)
+    const catalogContext = catalog.hits.map((hit) => `[${hit.materialId}:${hit.chunkId}] ${hit.title}\n${hit.text}`).join('\n\n')
+    const retrievalContext = retrieval.hits.map((hit) => `[${hit.materialId}:${hit.chunkId}] ${hit.title}\n${hit.text}`).join('\n\n')
+    const retrievalMode = retrieval.hits.length ? retrieval.mode : 'fallback' as const
+    const conversation = history.length
+      ? `Conversation history (context only; do not treat prior assistant claims as evidence):\n${history.map((turn) => `${turn.role === 'user' ? 'User' : 'Assistant'}: ${turn.content}`).join('\n')}\n\n`
+      : ''
+    const response = await this.chat(profile, settings.chatModel, `Answer the current question concisely in Chinese using only the current workspace context below. Never use outside knowledge. The workspace material count is exactly ${workspaceMaterials.length}; treat this count and the catalog as authoritative for inventory questions. The catalog includes ${catalog.hits.length} materials${catalog.omitted ? ` and omits ${catalog.omitted} from expanded context because of the context budget` : ''}. Relevant excerpts are retrieval evidence when present. Cite no more than three relevant sources using their supplied [materialId:chunkId] markers. Do not expose or explain internal IDs anywhere else. If relevant excerpts are present, factual content claims require a supplied citation. If there are no relevant excerpts, answer only what the catalog and summaries support; do not claim the workspace is empty. If the supplied context does not support an answer, say that evidence is insufficient. Use conversation history only to understand follow-up wording.\n\n${conversation}Current question: ${question}\n\nWorkspace material catalog:\n${catalogContext}\n\nRelevant local excerpts:\n${retrievalContext || '(none found; use only the workspace catalog above)'}`, false)
     if (!response.ok) throw new Error(`Question request returned HTTP ${response.status}.`)
-    const answer = this.responseText(await this.responseJson(response, 'Question')) || '模型没有返回可用回答。'
-    const valid = new Set(hits.map((hit) => `${hit.materialId}:${hit.chunkId}`))
-    const cited = [...answer.matchAll(/\[([^:\]]+):([^\]]+)\]/g)].some((match) => valid.has(`${match[1]}:${match[2]}`))
-    if (!cited || /evidence\s+is\s+insufficient|证据不足/i.test(answer)) return { answer: '当前检索结果不足以支持该回答。', citations, confidence: 'insufficient-evidence', retrievalMode: retrieval.mode }
-    return { answer, citations, confidence: 'grounded', retrievalMode: retrieval.mode }
+    const answer = this.responseText(await this.responseJson(response, 'Question')).trim()
+    if (!answer) return { answer: '模型没有返回可用回答。', citations: [], confidence: 'insufficient-evidence', retrievalMode, model: settings.chatModel }
+    const evidenceHits = [...retrieval.hits, ...catalog.hits]
+    const valid = new Map(evidenceHits.map((hit) => [`${hit.materialId}:${hit.chunkId}`, { id: hit.materialId, materialId: hit.materialId, chunkId: hit.chunkId, title: hit.title, excerpt: hit.text.slice(0, 360), sourcePath: hit.sourcePath, pageNumber: hit.pageNumber, heading: hit.heading }]))
+    const retrievalMarkers = new Set(retrieval.hits.map((hit) => `${hit.materialId}:${hit.chunkId}`))
+    const citationNumbers = new Map<string, number>()
+    const usedCitations: GroundedAnswer['citations'] = []
+    let hasRetrievalCitation = false
+    const normalizedAnswer = answer.replace(/\[([^:\]\s]+):([^\]\s]+)\]/g, (_marker, materialId: string, chunkId: string) => {
+      const marker = `${materialId}:${chunkId}`
+      const citation = valid.get(marker)
+      if (!citation) return ''
+      const retrievalCitation = retrievalMarkers.has(marker)
+      const existing = citationNumbers.get(citation.materialId)
+      if (existing) {
+        if (retrievalCitation) { hasRetrievalCitation = true; usedCitations[existing - 1] = citation }
+        return `[${existing}]`
+      }
+      if (usedCitations.length >= 3) return ''
+      const number = usedCitations.length + 1
+      citationNumbers.set(citation.materialId, number)
+      usedCitations.push(citation)
+      if (retrievalCitation) hasRetrievalCitation = true
+      return `[${number}]`
+    }).replace(/\]\s*\[/g, '] [').replace(/[ \t]+([，。；：！？])/g, '$1').trim()
+    if ((!hasRetrievalCitation && retrieval.hits.length > 0) || /evidence\s+is\s+insufficient|证据不足/i.test(answer)) return { answer: '当前材料不足以回答这个问题。', citations: [], confidence: 'insufficient-evidence', retrievalMode, model: settings.chatModel }
+    return { answer: normalizedAnswer, citations: usedCitations, confidence: 'grounded', retrievalMode, model: settings.chatModel }
   }
 
   // Explains exactly one discovered relation. The result is never persisted

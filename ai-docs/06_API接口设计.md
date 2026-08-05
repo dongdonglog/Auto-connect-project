@@ -48,8 +48,8 @@ ai.explainRelation(relationId: string): Promise<RelationAiExplanation>
 
 - `search(query)`：返回 `SearchHit[]`，FTS 优先，可选 hybrid。
 - `ai:ask(question)`：返回 `GroundedAnswer`；没有命中时返回 `insufficient-evidence`，不虚构回答。
-- `ai:planTopicOperation(topicId, question)`：返回持久化的提案，不直接应用。
-- 旧 `analysis:*` 仅为兼容主题 AI 流程保留，不应作为 Explorer 的依赖。
+- `ai:explainRelation(relationId)`：返回 `RelationAiExplanation`，仅解释该关系，不写入或修改正式关系。
+- 旧批量主题分析与主题工具仅保留历史数据兼容，不提供 renderer、preload 或公开 IPC 入口。
 
 ## 6. 测试契约
 

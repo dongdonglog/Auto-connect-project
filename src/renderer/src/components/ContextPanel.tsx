@@ -15,6 +15,7 @@ export interface ContextPanelProps {
 const materialIcon = (type: string) => type === 'link' ? <Link2 size={16}/> : type === 'note' ? <FilePlus2 size={16}/> : <FileText size={16}/>
 const toDay = (value?: string | null) => value ? new Intl.DateTimeFormat('zh-CN', { month: 'short', day: 'numeric' }).format(new Date(value)) : '未标记日期'
 const isEditable = (material: Material) => material.type === 'note' || material.type === 'document' || (material.type === 'file' && /\.(md|txt|csv|json|html?)$/i.test(material.sourcePath ?? material.storedPath ?? ''))
+const cardColors = ['#4f7cff', '#08776f', '#b26a21', '#a14569', '#7654a6']
 
 function BoardAttributes({ topic, material, onRefresh }: { topic: TopicMap; material: Material; onRefresh(): Promise<void> }): React.ReactElement | null {
   const boardMaterial = topic.materials.find((item) => item.id === material.id)
@@ -39,15 +40,16 @@ function BoardAttributes({ topic, material, onRefresh }: { topic: TopicMap; mate
     await onRefresh()
   }
 
-  return (
-    <section className="panel-section">
-      <h3>画板属性</h3>
-      <label>颜色<input type="color" value={color || '#4f7cff'} onChange={(event) => setColor(event.target.value)}/></label>
-      <label>标签<input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="用逗号分隔"/></label>
-      <label>备注<textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="仅在当前主题中显示"/></label>
-      <button className="secondary-button" onClick={() => void save()}>保存属性</button>
-    </section>
-  )
+  return <section className="panel-section board-attributes">
+    <div className="panel-section-title"><h3>画板属性</h3><span>仅当前主题</span></div>
+    <label><span>卡片颜色</span><div className="color-control">
+      {cardColors.map((preset) => <button key={preset} type="button" title={preset} aria-label={`使用颜色 ${preset}`} className={color === preset || (!color && preset === cardColors[0]) ? 'active' : ''} style={{ backgroundColor: preset }} onClick={() => setColor(preset)}/>) }
+      <input type="color" aria-label="自定义卡片颜色" value={color || cardColors[0]} onChange={(event) => setColor(event.target.value)}/>
+    </div></label>
+    <label><span>标签</span><input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="用逗号分隔"/></label>
+    <label><span>备注</span><textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="仅在当前主题中显示"/></label>
+    <div className="board-attribute-actions"><button className="secondary-button" onClick={() => void save()}>保存画板属性</button></div>
+  </section>
 }
 
 export function ContextPanel({ material, topics, activeTopic, onClose, onRefresh, onOpenTopic }: ContextPanelProps): React.ReactElement {
