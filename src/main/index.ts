@@ -2,16 +2,17 @@ import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, safeStorage, shel
 import { join } from 'node:path'
 import { WorkspaceService } from './workspace-service'
 import { AiService } from './ai-service'
-import type { ModelSettings, ProviderProfileInput } from './types'
+import type { KnowledgeQuestion, ModelSettings, ProviderProfileInput } from './types'
 import { AppStore } from './app-store'
 import { resetLearningPathDemo } from './demo-service'
-import { TopicMcpServer } from './topic-mcp'
+import { assertEnum, assertId, assertLimit, assertNumber, assertString, IpcValidationError } from './ipc-validation'
+
+const MATERIAL_RELATION_STATUSES = ['visible', 'hidden', 'fixed'] as const
 
 let window: BrowserWindow | null = null
 const workspace = new WorkspaceService()
 let appStore: AppStore
 let ai: AiService
-const topicMcp = new TopicMcpServer((topicId) => workspace.topicMap(topicId))
 
 
 function createWindow(): void {
@@ -42,10 +43,12 @@ function registerIpc(): void {
   })
   ipcMain.handle('dialog:savePackage', async () => (await dialog.showSaveDialog({ defaultPath: 'workspace.material-workspace', filters: [{ name: 'Material Map workspace', extensions: ['material-workspace'] }] })).filePath ?? null)
   ipcMain.handle('workspace:create', async (_event, root: string, name: string, password?: string) => { const summary = await workspace.create(root, name, password); appStore.rememberWorkspace(summary.root, summary.name); return summary })
+  ipcMain.handle('workspace:inspect', (_event, root: string) => workspace.inspectWorkspace(root))
+  ipcMain.handle('workspace:inspectPackage', (_event, file: string) => workspace.inspectPackage(file))
   ipcMain.handle('workspace:open', async (_event, root: string, password?: string) => { const summary = await workspace.open(root, password); appStore.rememberWorkspace(summary.root, summary.name); return summary })
   ipcMain.handle('workspace:export', (_event, destination: string) => workspace.exportPackage(destination))
-  ipcMain.handle('workspace:import', async (_event, file: string, destination: string) => {
-    const summary = await workspace.importPackage(file, destination)
+  ipcMain.handle('workspace:import', async (_event, file: string, destination: string, password?: string) => {
+    const summary = await workspace.importPackage(file, destination, password)
     appStore.rememberWorkspace(summary.root, summary.name)
     return summary
   })
@@ -62,6 +65,10 @@ function registerIpc(): void {
   ipcMain.handle('materials:link', (_event, url: string) => workspace.createLink(url))
   ipcMain.handle('materials:retry', (_event, id: string) => workspace.retry(id))
   ipcMain.handle('materials:date', (_event, id: string, date: string) => workspace.updateMaterialDate(id, date))
+  ipcMain.handle('materials:relations', (_event, materialId: string, limit?: number, includeHidden?: boolean) => workspace.listMaterialRelations(assertId(materialId, '材料标识'), assertLimit(limit, 20), includeHidden === true))
+  ipcMain.handle('materials:relationEvidence', (_event, relationId: string) => workspace.listRelationshipEvidence(assertId(relationId, '关系标识')))
+  ipcMain.handle('materials:relationStatus', (_event, relationId: string, status) => workspace.updateMaterialRelationStatus(assertId(relationId, '关系标识'), assertEnum(status, MATERIAL_RELATION_STATUSES, '关系状态')))
+  ipcMain.handle('materials:fixRelation', (_event, relationId: string, topicId?: string) => workspace.fixMaterialRelation(assertId(relationId, '关系标识'), topicId === undefined || topicId === null ? undefined : assertId(topicId, '主题标识')))
   ipcMain.handle('sources:list', () => workspace.listFolderSources())
   ipcMain.handle('sources:add', (_event, input) => workspace.addFolderSource(input))
   ipcMain.handle('sources:update', (_event, id: string, input) => workspace.updateFolderSource(id, input))
@@ -71,31 +78,35 @@ function registerIpc(): void {
   ipcMain.handle('sources:capability', () => workspace.indexCapability())
   ipcMain.handle('topics:list', () => workspace.listTopics())
   ipcMain.handle('topics:listArchived', () => workspace.listArchivedTopics())
-  ipcMain.handle('topics:create', (_event, name: string, description: string) => workspace.createTopic(name, description))
-  ipcMain.handle('topics:addMaterial', (_event, topicId: string, materialId: string, workstreamId?: string) => workspace.addToTopic(topicId, materialId, workstreamId))
-  ipcMain.handle('topics:addMaterials', (_event, topicId: string, materialIds: string[]) => workspace.addMaterialsToTopic(topicId, materialIds))
-  ipcMain.handle('topics:forMaterial', (_event, materialId: string) => workspace.topicsForMaterial(materialId))
-  ipcMain.handle('topics:removeMaterial', (_event, topicId: string, materialId: string) => workspace.removeFromTopic(topicId, materialId))
-  ipcMain.handle('topics:archive', (_event, topicId: string) => workspace.archiveTopic(topicId))
-  ipcMain.handle('topics:restore', (_event, topicId: string) => workspace.restoreTopic(topicId))
-  ipcMain.handle('topics:deleteArchived', (_event, topicId: string) => workspace.deleteArchivedTopic(topicId))
-  ipcMain.handle('topics:map', (_event, topicId: string) => workspace.topicMap(topicId))
-  ipcMain.handle('topics:rebuildTopology', (_event, topicId: string) => workspace.rebuildSystemTopology(topicId))
-  ipcMain.handle('analysis:topic', (_event, topicId: string) => ai.analyzeTopic(topicId))
-  ipcMain.handle('analysis:status', (_event, topicId: string) => workspace.analysisStatus(topicId))
-  ipcMain.handle('analysis:run', (_event, topicId: string) => workspace.latestTopicAnalysisRun(topicId))
+  ipcMain.handle('topics:create', (_event, name: string, description: string) => workspace.createTopic(assertString(name, '主题名称', 80), assertString(description ?? '', '主题描述', 500)))
+  ipcMain.handle('topics:addMaterial', (_event, topicId: string, materialId: string, workstreamId?: string) => workspace.addToTopic(assertId(topicId, '主题标识'), assertId(materialId, '材料标识'), workstreamId === undefined || workstreamId === null ? undefined : assertId(workstreamId, '分组标识')))
+  ipcMain.handle('topics:addMaterials', (_event, topicId: string, materialIds: string[]) => { if (!Array.isArray(materialIds) || materialIds.length > 200) throw new IpcValidationError('材料列表无效。'); return workspace.addMaterialsToTopic(assertId(topicId, '主题标识'), materialIds.map((materialId) => assertId(materialId, '材料标识'))) })
+  ipcMain.handle('topics:forMaterial', (_event, materialId: string) => workspace.topicsForMaterial(assertId(materialId, '材料标识')))
+  ipcMain.handle('topics:removeMaterial', (_event, topicId: string, materialId: string) => workspace.removeFromTopic(assertId(topicId, '主题标识'), assertId(materialId, '材料标识')))
+  ipcMain.handle('topics:archive', (_event, topicId: string) => workspace.archiveTopic(assertId(topicId, '主题标识')))
+  ipcMain.handle('topics:restore', (_event, topicId: string) => workspace.restoreTopic(assertId(topicId, '主题标识')))
+  ipcMain.handle('topics:deleteArchived', (_event, topicId: string) => workspace.deleteArchivedTopic(assertId(topicId, '主题标识')))
+  ipcMain.handle('topics:map', (_event, topicId: string) => workspace.topicMap(assertId(topicId, '主题标识')))
+  ipcMain.handle('topics:rebuildTopology', (_event, topicId: string) => workspace.rebuildSystemTopology(assertId(topicId, '主题标识')))
   ipcMain.handle('demo:create', () => resetLearningPathDemo(workspace))
   ipcMain.handle('workstreams:create', (_event, topicId: string, name: string) => workspace.createWorkstream(topicId, name))
   ipcMain.handle('workstreams:update', (_event, id: string, name: string) => workspace.updateWorkstream(id, name))
   ipcMain.handle('workstreams:delete', (_event, id: string) => workspace.deleteWorkstream(id))
   ipcMain.handle('workstreams:moveMaterial', (_event, topicId: string, materialId: string, workstreamId: string | null) => workspace.moveMaterial(topicId, materialId, workstreamId))
-  ipcMain.handle('topics:positionMaterial', (_event, topicId: string, materialId: string, x: number, y: number) => workspace.positionMaterial(topicId, materialId, x, y))
-  ipcMain.handle('topics:layout', (_event, topicId: string, positions: Array<{ materialId: string; x: number; y: number }>) => workspace.positionMaterials(topicId, positions))
-  ipcMain.handle('topics:updateCardStyle', (_event, topicId: string, materialId: string, input: { color?: string | null; tags?: string[]; note?: string | null }) => workspace.updateCardStyle(topicId, materialId, input))
-  ipcMain.handle('topics:updateCardOrder', (_event, topicId: string, materialId: string, sequence: number) => workspace.updateCardOrder(topicId, materialId, sequence))
-  ipcMain.handle('topics:resetCardOrder', (_event, topicId: string) => workspace.resetCardOrder(topicId))
-  ipcMain.handle('topics:updateRelationStyle', (_event, topicId: string, relationId: string, input) => workspace.updateRelationStyle(topicId, relationId, input))
-  ipcMain.handle('relations:create', (_event, relation) => workspace.createRelation(relation))
+  ipcMain.handle('topics:positionMaterial', (_event, topicId: string, materialId: string, x: number, y: number) => workspace.positionMaterial(assertId(topicId, '主题标识'), assertId(materialId, '材料标识'), assertNumber(x, '横坐标'), assertNumber(y, '纵坐标')))
+  ipcMain.handle('topics:layout', (_event, topicId: string, positions: Array<{ materialId: string; x: number; y: number }>) => { if (!Array.isArray(positions) || positions.length > 500) throw new IpcValidationError('布局数据无效。'); return workspace.positionMaterials(assertId(topicId, '主题标识'), positions.map((position) => ({ materialId: assertId(position?.materialId, '材料标识'), x: assertNumber(position?.x, '横坐标'), y: assertNumber(position?.y, '纵坐标') }))) })
+  ipcMain.handle('topics:updateCardStyle', (_event, topicId: string, materialId: string, input: { color?: string | null; tags?: string[]; note?: string | null }) => workspace.updateCardStyle(assertId(topicId, '主题标识'), assertId(materialId, '材料标识'), input))
+  ipcMain.handle('topics:updateCardOrder', (_event, topicId: string, materialId: string, sequence: number) => workspace.updateCardOrder(assertId(topicId, '主题标识'), assertId(materialId, '材料标识'), assertNumber(sequence, '排序序号')))
+  ipcMain.handle('topics:resetCardOrder', (_event, topicId: string) => workspace.resetCardOrder(assertId(topicId, '主题标识')))
+  ipcMain.handle('topics:updateRelationStyle', (_event, topicId: string, relationId: string, input) => workspace.updateRelationStyle(assertId(topicId, '主题标识'), assertId(relationId, '关系标识'), input))
+  ipcMain.handle('topics:executeCommand', (_event, topicId: string, command) => {
+    if (!command || typeof command !== 'object' || Array.isArray(command) || !('kind' in command) || !('payload' in command) || !command.payload || typeof command.payload !== 'object' || Array.isArray(command.payload)) throw new IpcValidationError('画板编辑命令无效。')
+    return workspace.executeTopicEditorCommand(assertId(topicId, '主题标识'), { kind: assertString(command.kind, '命令类型', 48), payload: command.payload as Record<string, unknown> })
+  })
+  ipcMain.handle('topics:undo', (_event, topicId: string) => workspace.undoTopicEditorCommand(assertId(topicId, '主题标识')))
+  ipcMain.handle('topics:redo', (_event, topicId: string) => workspace.redoTopicEditorCommand(assertId(topicId, '主题标识')))
+  ipcMain.handle('topics:history', (_event, topicId: string) => workspace.topicHistoryStatus(assertId(topicId, '主题标识')))
+  ipcMain.handle('relations:create', (_event, relation) => workspace.createRelation({ ...relation, sourceMaterialId: assertId(relation?.sourceMaterialId, '来源材料标识'), targetMaterialId: assertId(relation?.targetMaterialId, '目标材料标识'), label: assertString(relation?.label, '关系标签', 64) }))
   ipcMain.handle('relations:update', (_event, id: string, label: string) => workspace.updateRelation(id, label))
   ipcMain.handle('relations:delete', (_event, id: string) => workspace.deleteRelation(id))
   ipcMain.handle('search', (_event, query: string) => workspace.searchKnowledge(query))
@@ -115,13 +126,8 @@ function registerIpc(): void {
   ipcMain.handle('ai-config:clearLegacy', () => appStore.clearLegacyConfigs())
   ipcMain.handle('workspace:recent', () => appStore.listRecent())
   ipcMain.handle('workspace:forgetRecent', (_event, root: string) => appStore.forgetWorkspace(root))
-  ipcMain.handle('ai:analyze', (_event, topicId: string, materialId: string) => ai.analyze(topicId, materialId))
-  ipcMain.handle('ai:ask', (_event, question: string) => ai.ask(question))
-  ipcMain.handle('ai:planTopicOperation', (_event, topicId: string, question: string) => ai.planTopicOperation(topicId, question))
-  ipcMain.handle('topics:proposals', (_event, topicId: string) => workspace.listTopicProposals(topicId))
-  ipcMain.handle('topics:proposalStatus', (_event, proposalId: string, status: 'pending' | 'accepted' | 'archived') => workspace.updateTopicProposalStatus(proposalId, status))
-  ipcMain.handle('topic-tools:list', () => topicMcp.listTools())
-  ipcMain.handle('topic-tools:call', (_event, name: string, args: { topicId?: string; relations?: unknown; positions?: unknown; workstreams?: unknown }) => topicMcp.call(name, args))
+  ipcMain.handle('ai:ask', (_event, question: string | KnowledgeQuestion) => ai.ask(question))
+  ipcMain.handle('ai:explainRelation', (_event, relationId: string) => ai.explainMaterialRelation(assertId(relationId, '关系标识')))
 }
 
 function createMenu(): void {

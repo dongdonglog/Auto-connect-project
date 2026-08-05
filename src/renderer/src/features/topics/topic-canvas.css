@@ -1,0 +1,76 @@
+/* 主题画板布局：工具条 + 画布 + 关系属性面板 */
+.whiteboard {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr) 260px;
+  gap: 12px;
+  align-items: start;
+}
+
+.whiteboard-inspector {
+  position: sticky;
+  top: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: min(560px, calc(100vh - 140px));
+  overflow-y: auto;
+  padding: 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+  font-size: 13px;
+  color: #31475f;
+}
+.whiteboard-inspector header { display: flex; justify-content: space-between; align-items: center; }
+.whiteboard-inspector header h3,
+.whiteboard-inspector > h3 { margin: 0; font-size: 14px; font-weight: 650; }
+.whiteboard-inspector header .icon-button { width: 25px; height: 25px; border: 0; box-shadow: none; }
+.whiteboard-inspector p { margin: 0; color: #60748d; line-height: 1.5; word-break: break-all; }
+.whiteboard-inspector label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: #60748d; }
+.whiteboard-inspector input,
+.whiteboard-inspector select,
+.whiteboard-inspector textarea {
+  padding: 7px 9px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 6px;
+  font-size: 13px;
+  color: #29465f;
+  background: #fff;
+  transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+}
+.whiteboard-inspector input:focus,
+.whiteboard-inspector select:focus,
+.whiteboard-inspector textarea:focus { outline: none; border-color: var(--color-primary); box-shadow: 0 0 0 3px var(--color-primary-ring); }
+.whiteboard-inspector textarea { min-height: 68px; resize: vertical; font-family: inherit; line-height: 1.45; }
+.whiteboard-inspector textarea { width: 100%; box-sizing: border-box; }
+.whiteboard-inspector input[type="color"] { padding: 2px; height: 34px; }
+.whiteboard-inspector .danger-button { width: 100%; margin-top: 4px; }
+.whiteboard-inspector .secondary-button { width: 100%; margin-top: 2px; }
+.inspector-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.whiteboard-inspector .inspector-toggle { flex-direction: row; align-items: center; gap: 7px; color: #40536b; }
+.whiteboard-inspector .inspector-toggle input { width: 15px; height: 15px; margin: 0; padding: 0; }
+
+/* 窄屏时属性面板移到画布下方，保持可读宽度 */
+@media (max-width: 1200px) {
+  .whiteboard { grid-template-columns: 56px minmax(0, 1fr); }
+  .whiteboard-inspector { position: static; grid-column: 2; width: 100%; box-sizing: border-box; }
+}
+
+/* React Flow 基础组件微调，配合全局主题 */
+.react-flow__minimap {
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+}
+.react-flow__controls {
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+}
+.react-flow__controls-button { border-bottom: 1px solid #eef2f7; }
+.react-flow__handle { width: 9px; height: 9px; background: var(--color-primary); border: 2px solid #fff; }
+.react-flow__handle.connecting { background: var(--color-note); }
+.flow-map .react-flow__background { pointer-events: none; }

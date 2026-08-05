@@ -14,6 +14,25 @@ function dateFromText(text: string): string | null {
   return `${match[1]}-${match[2].padStart(2, '0')}-${match[3].padStart(2, '0')}T00:00:00.000Z`
 }
 
+/** Strip Markdown/HTML syntax so excerpts read as plain prose. */
+export function plainExcerpt(text: string, maxLength = 500): string {
+  const plain = text
+    .replace(/```[\s\S]*?```/g, ' ')                    // code fences
+    .replace(/`([^`]*)`/g, '$1')                        // inline code
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')           // images
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')            // links -> label
+    .replace(/^\s{0,3}#{1,6}\s+/gm, '')                 // headings
+    .replace(/^\s{0,3}>\s?/gm, '')                      // blockquotes
+    .replace(/^\s*[-*+]\s+/gm, '')                      // unordered lists
+    .replace(/^\s*\d+\.\s+/gm, '')                      // ordered lists
+    .replace(/^\s*[-*_]{3,}\s*$/gm, ' ')                // hr
+    .replace(/<[^>]+>/g, ' ')                           // html tags
+    .replace(/[*_~]{1,3}([^*_~]+)[*_~]{1,3}/g, '$1')    // emphasis
+    .replace(/\s+/g, ' ')
+    .trim()
+  return plain.slice(0, maxLength)
+}
+
 export async function extractFile(filePath: string, suppliedData?: Buffer): Promise<ExtractedMaterial> {
   const extension = extname(filePath).toLowerCase()
   const title = basename(filePath, extension)

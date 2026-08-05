@@ -1,154 +1,268 @@
-# Material Map
+<p align="center">
+  <img src="docs/logo.svg" alt="Material Map" width="120" />
+</p>
 
-Material Map 是一个本地优先的个人文件夹 AI 知识库。它将原始文件、解析快照、全文索引、主题和关系保存在本地工作区，帮助用户把材料整理成可编辑的知识地图和依赖流程。
+<h1 align="center">Material Map</h1>
 
-它不是云端协作产品，也不是自动生成全库大图谱的工具。用户创建主题、保留原始材料的控制权；AI 只能在用户主动请求时提出有证据的补充关系。
+<p align="center">
+  <strong>本地优先 · 证据驱动 · 可解释的材料关系探索器</strong>
+</p>
 
-## 产品原则
+<p align="center">
+  <a href="#"><img src="https://img.shields.io/badge/version-0.1.0-blue" alt="Version" /></a>
+  <a href="#"><img src="https://img.shields.io/badge/platform-Windows%2010%2B-lightgrey" alt="Platform" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License" /></a>
+  <img src="https://img.shields.io/badge/electron-33%2B-47848f?logo=electron" alt="Electron" />
+  <img src="https://img.shields.io/badge/react-19-61dafb?logo=react" alt="React" />
+</p>
 
-1. 本地优先：原始文件仍留在用户文件夹，工作区只保存材料记录、解析快照、索引和关系。
-2. 无 AI 可用：文件夹索引、全文检索、主题画板和默认拓扑不依赖网络、向量模型或 API Key。
-3. 证据优先：本地问答和 AI 建议必须展示材料或段落证据；证据不足时必须明确拒答。
-4. 用户优先：手动关系和手动位置不会被系统或 AI 覆盖。
-5. 可恢复：主题归档不删除材料；失联文件保留最后一次解析快照；工作区可导入、导出和可选加密。
+<p align="center">
+  <em>打开一份材料，1 秒内看清它和什么有关、证据在哪。</em>
+</p>
 
-## MVP 定义
+---
 
-当前 MVP 的核心闭环是：
+> **⚠️ 当前状态：0.1 MVP 开发中。** 核心闭环（导入 → 探索 → 固定 → 画板编辑）已可运行，部分功能仍在完善。详见 [发布路线图](#发布路线图)。
 
-```text
-选择本地文件夹
--> 增量解析与 FTS 索引
--> 搜索或带引用问答
--> 选择材料创建主题
--> 无 AI 生成可编辑的默认拓扑
--> 按需请求 AI 补充证据关系
+## 为什么需要 Material Map？
+
+当本地材料积累到几十上百份时，你会遇到这些困境：
+
+- 🔍 **全文检索只能找到关键词，看不到关联** — 搜索 "支付" 找到 30 篇文档，但它们之间什么关系？
+- 🤔 **相似度推荐缺少证据** — 算法告诉你 A 和 B 相关，但不告诉你为什么
+- 💸 **AI 全量分析太慢、太贵、噪声太多** — 一次性分析所有材料既费时费钱，又容易产生虚假关联
+- 🎛️ **你整理的关系应该由你掌控** — 手动确认过的连线不该被系统悄悄覆盖
+
+Material Map 不做一个「全自动知识图谱」，而是做一个**探索工具**：你打开材料，它告诉你证据充分的关联，你可以选择固定、隐藏或继续深入，最后把确认的关系沉淀到主题画板中。
+
+## 与同类产品的区别
+
+| | Material Map | Obsidian | Logseq | NotebookLM |
+|---|---|---|---|---|
+| **核心交互** | 以材料为中心探索关系 | 以笔记为中心双向链接 | 以大纲为中心块引用 | 以聊天为中心的 RAG |
+| **关系发现** | 显式引用 + 受控实体，每条关系带证据 | 手动 `[[link]]` | 手动 `[[link]]` + 块引用 | AI 自动生成 |
+| **离线可用** | ✅ 无需网络 | ✅ | ✅ | ❌ 需要云端 |
+| **AI 角色** | 按需解释单条关系 | 社区插件 | 社区插件 | 核心依赖 AI |
+| **数据存储** | 本地 SQLite | 本地 Markdown 文件 | 本地 Markdown 文件 | 云端 |
+| **目标场景** | 技术文档、代码、项目资料的关系探索 | 个人知识管理 | 大纲式笔记 | 文档对话 |
+
+## 核心功能
+
+### 📥 材料导入与管理
+- 支持 **Markdown、TXT、CSV、JSON、HTML、PDF、DOCX** 格式
+- 文件夹监听：新增、修改、删除自动增量同步
+- 材料失联后保留快照，不丢数据
+- 工作区导出/恢复，支持可选加密
+
+### 🔗 可解释的关系发现
+- **显式引用优先**：自动识别 Markdown 链接、相对路径、代码 import 等文件引用
+- **实体共现分析**：提取受控技术实体（项目名、模块名、框架等），找出真正相关的材料
+- **每条关系都有证据**：展开即见原文引用与可跳转位置
+- **反噪声机制**：通用高频词不产生关系，最多展示 5 条结果
+
+### 🎨 主题画板
+- 基于 React Flow 的交互式画布
+- 四边端口任意组合创建正式关系
+- 编辑关系标签、方向、颜色、线型
+- DAG 自动层级布局
+
+### 🤖 可选 AI 增强
+- AI **默认关闭**，你完全掌控何时调用
+- 单条关系请求解释时，仅发送该关系的紧凑证据窗口
+- AI 失败不影响本地探索、阅读和画板操作
+- 实验性材料问答（基于本地检索 + 引用回答）
+
+## 快速开始
+
+### 下载安装
+
+从 [Releases](https://github.com/dongdonglog/Auto-connect-project/releases) 页面下载最新安装包：
+
+- **NSIS 安装版** (`Material-Map-Setup-x.x.x.exe`)：标准安装，支持自定义安装路径
+- **Portable 便携版** (`Material-Map-x.x.x.exe`)：解压即用，无需安装
+
+> 当前仅支持 Windows 10/11。macOS 和 Linux 支持在后续版本规划中。
+
+### 基本使用
+
+```
+1. 启动应用 → 创建或打开工作区
+2. 导入本地文件夹或拖入文件
+3. 在工作台点击任意材料 → 进入「探索」
+4. 右侧查看关联材料及证据 → 固定感兴趣的、隐藏不相关的
+5. 固定的关系进入「主题画板」→ 手动编辑、连线、布局
 ```
 
-MVP 只有在以下事项都在目标 Windows 环境验收后才可视为完成：
+## 开发指南
 
-- 新建或打开工作区，导入文件和笔记后可稳定检索。
-- 添加文件夹后，新增、修改、删除文件会增量同步；删除文件显示为失联但仍可查看快照。
-- 24 份带 `01` 至 `24` 编号的材料加入主题后，不配置 AI 也得到 23 条“下一步”关系和从左到右布局。
-- 搜索问答能打开到对应材料；无证据时显示“证据不足”，不生成虚构结论。
-- AI 未配置、超时或失败时，主题拓扑和手动编辑仍正常可用。
-- 加密工作区可读写、导出并重新导入。
-- Windows 的 NSIS 与 portable 安装包均完成真实数据库读写回归。
+### 环境要求
 
-## 主题拓扑契约
+- **Node.js** 24+
+- **操作系统** Windows 10/11（开发可在 macOS/Linux 进行，但打包仅支持 Windows）
 
-### 默认行为
-
-向主题加入材料时，主进程会立即生成 `createdBy: 'system'` 的 `next` 关系，不等待 AI。系统使用稳定排序：
-
-1. 所有材料都有手动顺序时，按手动顺序。
-2. 否则优先识别标题中的课程或章节编号，例如 `01-`、`第 1 章`、`Lesson 1`。
-3. 再按材料日期、主题加入时间、标题和 ID。
-
-系统关系只属于当前主题。增删材料、修改手动顺序、恢复时间顺序和重新打开旧工作区时，系统只重建自己的关系层和自动位置。
-
-### 关系优先级
-
-| 来源 | 用途 | 自动覆盖 |
-| --- | --- | --- |
-| `manual` | 用户拖拽创建或确认的正式关系 | 永不覆盖 |
-| `system` | 由确定顺序生成的基础“下一步”链路 | 可重建 |
-| `ai` | 用户主动请求后生成的证据关系 | 可归档，不覆盖手动关系 |
-
-手动位置会被标记为锁定；后续系统重建和 AI 布局不会改动它。相同方向已有任意关系时，对话建议会被过滤；若用户点击旧建议，应用会标记为已处理，不再抛出重复关系错误。
-
-### AI 的边界
-
-AI 不是排序器，也不是基础连线的前置条件。画板中的“AI 补充关系”只用于提出不能由顺序确定的依赖、佐证、解释、阻塞或验证关系。分析采用材料卡、候选关系、段落证据验证和最后一次性提交；模型超时或不可用时，画板保持原状。
-
-## 已实现能力
-
-- 工作区：创建、打开、导入、导出与可选加密；近期工作区记录。
-- 材料：导入文件、笔记、链接和文档；Markdown、TXT、CSV、JSON、HTML、PDF、DOCX 提取与预览。
-- 文件夹来源：多目录扫描、监听、包含/排除规则、增量重扫、暂停和失联快照。
-- 检索：段落分块、SQLite FTS5；可选 `sqlite-vec` 向量增强，向量不可用时退回全文检索。
-- 问答：基于本地检索结果的引用回答，支持本地模型和经用户同意的云端模型。
-- 主题画板：React Flow 画布、手动连线、关系样式、归档、工作线、默认拓扑和依赖流程视图。
-- AI：模型配置可编辑、连接验证、材料卡缓存、候选进度、证据验证、可审阅提案。
-
-## 架构
-
-```text
-renderer (React / React Flow)
-        | typed preload IPC
-main process
-  |- WorkspaceService: SQLite、材料、索引、主题、系统拓扑
-  |- AiService: 问答、材料卡、候选、证据验证、提案
-  |- folder watcher: chokidar 增量同步
-  |- native SQLite + FTS5 + optional sqlite-vec
-```
-
-关键目录：
-
-- `src/main/workspace-service.ts`：工作区、迁移、索引和主题数据主服务。
-- `src/main/ai-service.ts`：带证据问答与 AI 补充关系编排。
-- `src/shared/topic-topology.ts`：主进程和画布共用的稳定排序与系统布局纯函数。
-- `src/renderer/src/features/topics/`：主题画板及关系交互。
-- `src/renderer/src/features/workbench/`：材料工作台。
-- `src/e2e/`：真实 Electron 进程端到端测试。
-
-## 开发
-
-要求：Node.js 24+、Windows 10/11。首次运行：
+### 本地开发
 
 ```bash
+# 克隆仓库
+git clone https://github.com/dongdonglog/Auto-connect-project.git
+cd Auto-connect-project
+
+# 安装依赖
 npm install
+
+# 启动开发模式（热重载）
 npm run dev
 ```
 
-常用验证命令：
+### 常用命令
+
+| 命令 | 说明 |
+|---|---|
+| `npm run dev` | 启动 Electron 开发模式 |
+| `npx tsc --noEmit` | TypeScript 类型检查 |
+| `npm test` | 运行单元测试（Vitest） |
+| `npm run test:e2e` | 端到端测试（需先构建） |
+| `npm run build` | 生产构建 |
+| `npm run package` | 构建 + 打包 Windows 安装包 |
+
+### GitHub Actions 构建与发布
+
+仓库中的 `.github/workflows/windows-package.yml` 会在 `main`、`develop` 或 `feat/develop` 分支有新提交时，在 Windows Runner 上构建，并把安装包上传到对应的 Actions 运行记录中（保留 14 天）。
+
+要发布正式版本，给要发布的提交打一个 `v` 开头的标签：
 
 ```bash
-npx tsc --noEmit
-npm test
-npm run test:e2e
-npm run build
-npm run package
+git tag v0.1.0
+git push origin v0.1.0
 ```
 
-`npm run test:e2e` 会先构建，再启动 Electron 验证预加载 API、原生 SQLite、检索和默认系统拓扑。`npm run package` 生成 Windows NSIS 与 portable 包；打包完成不等于安装包已经过人工验收。
+标签构建成功后，工作流会自动创建 GitHub Release，并附上 NSIS 安装版、Portable 版及更新元数据。若 Release 创建权限被仓库策略禁止，请在 **Settings → Actions → General → Workflow permissions** 中允许工作流读写仓库内容。
 
-## 贡献与提交要求
+## 技术栈
 
-提交前必须遵循以下规则：
+| 层 | 技术 |
+|---|---|
+| **桌面框架** | Electron 33+ |
+| **前端** | React 19 + TypeScript |
+| **画布** | @xyflow/react (React Flow) |
+| **布局算法** | @dagrejs/dagre |
+| **数据库** | SQLite + FTS5 全文检索 |
+| **向量检索（可选）** | sqlite-vec |
+| **文件监听** | chokidar |
+| **文档解析** | mammoth (DOCX)、pdf-parse (PDF)、papaparse (CSV) |
+| **Markdown 渲染** | react-markdown + remark-gfm + rehype-highlight |
+| **测试** | Vitest + Playwright |
+| **构建** | electron-vite + electron-builder |
 
-1. 不要把 API Key、工作区数据库、导出包、用户材料、`release/` 或 `out/` 提交到仓库。
-2. 修改 `WorkspaceService`、数据库迁移、导入、索引或关系写入时，补充或更新 `src/main/workspace-service.test.ts`；迁移必须兼容旧工作区。
-3. 修改排序、布局或关系优先级时，更新 `src/shared/topic-topology.ts` 的单元测试；不得让 AI 成为基础拓扑的依赖。
-4. 修改 IPC 时，同时更新主进程、`src/preload/index.ts`、`src/preload/index.d.ts` 和 renderer 的类型入口。
-5. 修改主进程、预加载或核心用户流时，至少运行 `npx tsc --noEmit`、`npm test`、`npm run test:e2e`。
-6. 新增 AI 行为必须有明确的用户触发点、云端同意检查、证据来源和失败/超时回退；AI 不得直接覆盖手动关系或原始文件。
-7. 保持改动聚焦。不要为了 UI 调整顺带重写无关页面或改变工作区格式。
+## 架构概览
+
+```
+┌─────────────────────────────────┐
+│  Renderer (React / React Flow)  │
+│  ├─ Workbench    工作台          │
+│  ├─ Explorer     关系探索        │
+│  ├─ Topic Canvas 主题画板        │
+│  └─ Q&A          实验问答        │
+└────────────┬────────────────────┘
+             │  typed preload IPC
+┌────────────▼────────────────────┐
+│  Main Process                   │
+│  ├─ WorkspaceService            │
+│  │   └─ SQLite · FTS5 · Entity · Relation · Evidence
+│  ├─ AiService                   │
+│  │   └─ 问答 · 单条关系解释     │
+│  ├─ AppStore (模型配置 & 密钥)  │
+│  └─ chokidar (文件夹监听)       │
+└─────────────────────────────────┘
+```
+
+关键模块：
+
+- `src/main/workspace-service.ts` — 工作区、迁移、索引、关系数据主服务
+- `src/main/ai-service.ts` — 带证据问答与单条关系解释
+- `src/shared/topic-topology.ts` — 主进程与画布共用的稳定排序与系统布局
+- `src/renderer/src/features/topics/` — 主题画板与关系交互
+- `src/renderer/src/features/workbench/` — 材料工作台
+- `src/e2e/` — 真实 Electron 进程端到端测试
+
+## 产品原则
+
+1. **本地优先**：原始文件留在用户文件夹，工作区只保存元数据、索引和关系
+2. **无 AI 可用**：索引、检索、关系发现和画板不依赖网络或 API Key
+3. **证据优先**：每条自动关系必须展示材料或段落证据；证据不足明确拒答
+4. **用户优先**：手动关系和手动位置永不被他方覆盖
+5. **可恢复**：工作区可导出、导入和可选加密；失联文件保留快照
+
+## 文档
+
+完整的产品与技术文档见 [`ai-docs/`](./ai-docs/)：
+
+| 文档 | 说明 |
+|---|---|
+| [PRD](./ai-docs/01_PRD.md) | 产品愿景、用户与功能边界 |
+| [技术架构](./ai-docs/02_TDD_技术架构设计.md) | Electron 本地架构与运行时边界 |
+| [Graph 模型](./ai-docs/03_Graph模型设计.md) | Material、Entity、Relation 与 Topic 模型 |
+| [数据库 Schema](./ai-docs/04_数据库Schema设计.md) | SQLite 表、索引、迁移与导入导出 |
+| [AI Pipeline](./ai-docs/05_AI_Pipeline设计.md) | 按需解释、问答与隐私约束 |
+| [API 接口](./ai-docs/06_API接口设计.md) | preload IPC 类型契约 |
+| [UI 交互](./ai-docs/07_UI交互设计.md) | 工作台、Explorer、画板和问答交互 |
+| [MVP 计划](./ai-docs/08_MVP开发计划.md) | 0.1 里程碑、验收与性能目标 |
+
+## 发布路线图
+
+### v0.1 MVP（当前）
+
+- [x] 工作区创建、打开、导入导出与加密
+- [x] 材料导入与多格式解析（Markdown/PDF/DOCX/CSV 等）
+- [x] SQLite FTS5 全文检索 + 可选 sqlite-vec 向量增强
+- [x] 显式引用与实体共现关系发现
+- [x] Explorer 三栏探索（材料列表 / 阅读器 / 关联与证据）
+- [x] 主题画板（React Flow + 四边端口 + 手动连线）
+- [x] 可选 AI 解释与实验问答
+- [x] 文件夹监听增量同步
+- [x] 加密工作区 UI 接入
+- [ ] Windows NSIS/portable 安装包验收
+- [ ] 旧组件清理与 `App.tsx` 拆分
+- [ ] 大图性能压测与路由优化
+
+### 未来版本
+
+- 阅读路径自动生成
+- macOS / Linux 支持
+- 跨工作区关系查询
+- 受限 Agent 自动补全（需用户确认）
+
+## 贡献指南
+
+欢迎提交 Issue 和 Pull Request！提交前请注意：
+
+1. **不要提交** API Key、工作区数据库、导出包、用户材料、`release/` 或 `out/` 目录
+2. 修改核心服务时补充或更新对应测试
+3. 每项变更至少通过 `npx tsc --noEmit`、`npm test` 和 `npm run build`
+4. 核心流程变更额外执行 `npm run test:e2e`
+5. AI 行为必须有明确的用户触发点、云端同意检查和失败回退
 
 推荐提交格式：
 
 ```text
-feat(topology): rebuild system chain after membership changes
+feat(explorer): add evidence highlight and jump-to-source
 fix(search): retain snapshot citations for unavailable files
 test(workspace): cover encrypted migration fallback
 ```
 
-## 发布阻塞项
-
-以下问题尚未达到 MVP 发布标准，后续工作应优先解决，而不是继续扩展 UI：
-
-1. `App.tsx` 仍含旧工作台和旧主题组件逻辑；需要继续拆分，避免两个入口对主题行为产生不同语义。
-2. 从工作台批量创建主题后，旧入口仍会调用 AI 分析并覆盖系统布局意图；必须统一为“创建后直接显示系统拓扑，AI 仅由用户显式点击”。
-3. AI 分析有运行记录和阶段进度，但没有取消按钮、可恢复历史和明确的超时重试策略。
-4. 关系标签碰撞、复杂交叉边的避障路由、端口选择持久化仍不完善；大图应继续做性能与视觉压力测试。
-5. Windows NSIS/portable 尚未在干净机器完成安装、升级、加密工作区和真实数据库读写验证。
-6. 加密工作区的向量索引迁移仍采用 FTS 降级策略；加密 `vectors.sqlite` 的生命周期尚未完成。
-7. PDF 页码、Office/PDF 大文件、文件夹高频变动和错误恢复需要更多真实样本压力测试。
-8. 不同 OpenAI 兼容网关与 embedding 服务的互操作性尚未覆盖；网络超时、限流和模型异常需要可观察的重试策略。
-
 ## 数据与隐私
 
-- SQLite 工作区、解析文本、索引和主题关系默认保存本地。
-- 云端模型仅在用户启用并明确同意后接收本次请求必要的文本。
-- 项目不提供云同步、多人协作或托管后端。
-- 请定期导出 `.material-workspace` 作为工作区备份。
+- 所有 SQLite 工作区、解析文本、索引和关系**默认保存在本地**
+- 云端模型**仅在用户启用并明确同意后**接收本次请求必要的文本片段
+- 项目不提供云同步、多人协作或托管后端
+- 建议定期通过工作区导出功能备份数据
+
+## License
+
+[MIT](LICENSE)
+
+---
+
+<p align="center">
+  <sub>Built with ❤️ for people who want to understand their materials, not just search them.</sub>
+</p>

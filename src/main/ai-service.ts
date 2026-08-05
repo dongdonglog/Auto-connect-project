@@ -1,4 +1,4 @@
-import type { AnalysisSummary, GroundedAnswer, MaterialAnalysisCard, ModelSettings, ProviderProfile, ProviderProfileInput, TopicMap, TopicProposal, TopicRelationCandidate } from './types'
+import type { AnalysisSummary, GroundedAnswer, KnowledgeChatTurn, KnowledgeQuestion, Material, MaterialAnalysisCard, ModelSettings, ProviderProfile, ProviderProfileInput, RelationAiExplanationFailureReason, RelationAiExplanationResult, SearchHit, TopicMap, TopicProposal, TopicRelationCandidate } from './types'
 import { WorkspaceService } from './workspace-service'
 import { AppStore } from './app-store'
 import connectionSkill from './ai-skills/topic-connection.md?raw'
@@ -15,6 +15,22 @@ interface TopicAnalysisResult {
 const workflowRelations: Record<string, string> = { next: '下一步', depends_on: '依赖', explains: '解释', evidences: '佐证', implements: '实现', tests: '验证', blocks: '阻塞', improves: '改进', reviews: '复盘', references: '参考', related: '关联' }
 export interface AiActionProposal { id: string; kind: 'create_relation' | 'create_workstream' | 'delete_ai_relation' | 'rename_relation' | 'set_sequence' | 'set_card_style' | 'layout'; reason: string; evidence: string; materialId?: string; relationId?: string; payload?: Record<string, unknown> }
 
+const workspaceCatalogBudget = 24_000
+
+function workspaceCatalog(materials: Material[]): { hits: SearchHit[]; omitted: number } {
+  const hits: SearchHit[] = []
+  let used = 0
+  for (const material of materials) {
+    const summary = String(material.excerpt ?? material.extractedText ?? '').replace(/\s+/g, ' ').trim().slice(0, 320)
+    const text = `Type: ${material.type}; Status: ${material.status}; Summary: ${summary || '(no extracted summary)'}`
+    const cost = material.id.length + material.title.length + text.length + 20
+    if (hits.length && used + cost > workspaceCatalogBudget) break
+    hits.push({ materialId: material.id, chunkId: 'catalog', title: material.title.slice(0, 240), text, score: 1, sourcePath: material.sourcePath, pageNumber: null, heading: null, availability: material.availability })
+    used += cost
+  }
+  return { hits, omitted: Math.max(0, materials.length - hits.length) }
+}
+
 function parseJsonObject(text: string): Record<string, unknown> {
   const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim(); const start = cleaned.indexOf('{'); const end = cleaned.lastIndexOf('}')
   if (start < 0 || end <= start) throw new Error('Model output did not contain a JSON object.')
@@ -23,6 +39,7 @@ function parseJsonObject(text: string): Record<string, unknown> {
 
 export class AiService {
   private readonly topicRuns = new Map<string, Promise<AnalysisSummary>>()
+  private readonly topicControllers = new Map<string, AbortController>()
   constructor(private readonly workspace: WorkspaceService, private readonly appStore: AppStore) { const target = this.workspace as unknown as { setEmbeddingProvider?: (provider: (texts: string[]) => Promise<number[][] | null>) => void }; target.setEmbeddingProvider?.((texts) => this.embed(texts)) }
 
   async testConnection(settings: ModelSettings): Promise<{ ok: boolean; message: string }> {
@@ -87,10 +104,13 @@ export class AiService {
   analyzeTopic(topicId: string): Promise<AnalysisSummary> {
     const active = this.topicRuns.get(topicId)
     if (active) return active
-    const run = this.runTopicAnalysisV2(topicId).finally(() => this.topicRuns.delete(topicId))
+    const controller = new AbortController()
+    const run = this.runTopicAnalysisV2(topicId, controller.signal).finally(() => { this.topicRuns.delete(topicId); this.topicControllers.delete(topicId) })
     this.topicRuns.set(topicId, run)
+    this.topicControllers.set(topicId, controller)
     return run
   }
+  cancelTopicAnalysis(topicId: string): boolean { const controller = this.topicControllers.get(topicId); if (!controller) return false; controller.abort(); return true }
 
   private async runTopicAnalysis(topicId: string): Promise<AnalysisSummary> {
     const map = this.workspace.topicMap(topicId)
@@ -135,26 +155,99 @@ export class AiService {
     }
   }
 
-  async ask(question: string): Promise<GroundedAnswer> {
-    const retrieval = await this.workspace.searchKnowledgeAsync(question, { limit: 8 })
-    const hits = retrieval.hits
-    const citations = hits.map((hit) => ({ id: hit.materialId, materialId: hit.materialId, chunkId: hit.chunkId, title: hit.title, excerpt: hit.text.slice(0, 360), sourcePath: hit.sourcePath, pageNumber: hit.pageNumber, heading: hit.heading }))
+  async ask(input: string | KnowledgeQuestion): Promise<GroundedAnswer> {
+    const question = (typeof input === 'string' ? input : input?.question ?? '').trim().slice(0, 2000)
+    if (!question) throw new Error('请输入要查询的问题。')
     const settings = this.workspace.getSettings()
-    if (!hits.length) {
-      const pending = (this.workspace.listJobs?.() ?? []).some((job) => job.status === 'running' || job.status === 'queued')
-      return { answer: pending ? '材料仍在建立索引，请稍候再提问。' : '当前本地材料中没有找到足够证据。', citations, confidence: 'insufficient-evidence', retrievalMode: 'fallback' }
-    }
-    if (!settings.enabled || !settings.chatModel) return { answer: `找到 ${hits.length} 段相关本地材料。请在模型设置中启用问答以生成带引用的回答。`, citations, confidence: 'grounded', retrievalMode: retrieval.mode }
-    if (settings.provider !== 'ollama' && !settings.allowCloud) throw new Error('Cloud question answering requires explicit consent in settings.')
-    const context = hits.map((hit) => `[${hit.materialId}:${hit.chunkId}] ${hit.title}\n${hit.text}`).join('\n\n')
-    const response = await this.chat(this.profileFor(settings), settings.chatModel, `Answer only from these local excerpts. Cite the supplied material IDs in square brackets. If the excerpts do not support an answer, say that evidence is insufficient.\n\nQuestion: ${question}\n\nMaterials:\n${context}`, false)
+    if (!settings.enabled || !settings.profileId || !settings.chatModel) throw new Error('请先在“模型与隐私”中添加并启用 AI 配置后再提问。')
+    const profile = this.appStore.getProfile(settings.profileId)
+    if (!profile || (profile.provider !== 'ollama' && !profile.hasApiKey)) throw new Error('当前 AI 配置不完整，请在“模型与隐私”中重新配置。')
+    if (profile.provider !== 'ollama' && !settings.allowCloud) throw new Error('请先在“模型与隐私”中确认允许将材料发送到外部 AI 服务。')
+    const history: KnowledgeChatTurn[] = (typeof input === 'string' || !Array.isArray(input.history) ? [] : input.history)
+      .filter((turn): turn is KnowledgeChatTurn => Boolean(turn) && (turn.role === 'user' || turn.role === 'assistant') && typeof turn.content === 'string')
+      .slice(-8)
+      .map((turn) => ({ role: turn.role, content: turn.content.trim().slice(0, 1200) }))
+      .filter((turn) => turn.content.length > 0)
+    const workspaceMaterials = this.workspace.listMaterials()
+    if (!workspaceMaterials.length) return { answer: '当前工作区还没有材料。', citations: [], confidence: 'insufficient-evidence', retrievalMode: 'fallback', model: null }
+    const previousQuestion = [...history].reverse().find((turn) => turn.role === 'user')?.content
+    const retrievalQuestion = previousQuestion ? `${previousQuestion}\n${question}` : question
+    const retrieval = await this.workspace.searchKnowledgeAsync(retrievalQuestion, { limit: 6 })
+    const catalog = workspaceCatalog(workspaceMaterials)
+    const catalogContext = catalog.hits.map((hit) => `[${hit.materialId}:${hit.chunkId}] ${hit.title}\n${hit.text}`).join('\n\n')
+    const retrievalContext = retrieval.hits.map((hit) => `[${hit.materialId}:${hit.chunkId}] ${hit.title}\n${hit.text}`).join('\n\n')
+    const retrievalMode = retrieval.hits.length ? retrieval.mode : 'fallback' as const
+    const conversation = history.length
+      ? `Conversation history (context only; do not treat prior assistant claims as evidence):\n${history.map((turn) => `${turn.role === 'user' ? 'User' : 'Assistant'}: ${turn.content}`).join('\n')}\n\n`
+      : ''
+    const response = await this.chat(profile, settings.chatModel, `Answer the current question concisely in Chinese using only the current workspace context below. Never use outside knowledge. The workspace material count is exactly ${workspaceMaterials.length}; treat this count and the catalog as authoritative for inventory questions. The catalog includes ${catalog.hits.length} materials${catalog.omitted ? ` and omits ${catalog.omitted} from expanded context because of the context budget` : ''}. Relevant excerpts are retrieval evidence when present. Cite no more than three relevant sources using their supplied [materialId:chunkId] markers. Do not expose or explain internal IDs anywhere else. If relevant excerpts are present, factual content claims require a supplied citation. If there are no relevant excerpts, answer only what the catalog and summaries support; do not claim the workspace is empty. If the supplied context does not support an answer, say that evidence is insufficient. Use conversation history only to understand follow-up wording.\n\n${conversation}Current question: ${question}\n\nWorkspace material catalog:\n${catalogContext}\n\nRelevant local excerpts:\n${retrievalContext || '(none found; use only the workspace catalog above)'}`, false)
     if (!response.ok) throw new Error(`Question request returned HTTP ${response.status}.`)
-    const answer = this.responseText(await this.responseJson(response, 'Question')) || '模型没有返回可用回答。'
-    return { answer, citations, confidence: 'grounded', retrievalMode: retrieval.mode }
+    const answer = this.responseText(await this.responseJson(response, 'Question')).trim()
+    if (!answer) return { answer: '模型没有返回可用回答。', citations: [], confidence: 'insufficient-evidence', retrievalMode, model: settings.chatModel }
+    const evidenceHits = [...retrieval.hits, ...catalog.hits]
+    const valid = new Map(evidenceHits.map((hit) => [`${hit.materialId}:${hit.chunkId}`, { id: hit.materialId, materialId: hit.materialId, chunkId: hit.chunkId, title: hit.title, excerpt: hit.text.slice(0, 360), sourcePath: hit.sourcePath, pageNumber: hit.pageNumber, heading: hit.heading }]))
+    const retrievalMarkers = new Set(retrieval.hits.map((hit) => `${hit.materialId}:${hit.chunkId}`))
+    const citationNumbers = new Map<string, number>()
+    const usedCitations: GroundedAnswer['citations'] = []
+    let hasRetrievalCitation = false
+    const normalizedAnswer = answer.replace(/\[([^:\]\s]+):([^\]\s]+)\]/g, (_marker, materialId: string, chunkId: string) => {
+      const marker = `${materialId}:${chunkId}`
+      const citation = valid.get(marker)
+      if (!citation) return ''
+      const retrievalCitation = retrievalMarkers.has(marker)
+      const existing = citationNumbers.get(citation.materialId)
+      if (existing) {
+        if (retrievalCitation) { hasRetrievalCitation = true; usedCitations[existing - 1] = citation }
+        return `[${existing}]`
+      }
+      if (usedCitations.length >= 3) return ''
+      const number = usedCitations.length + 1
+      citationNumbers.set(citation.materialId, number)
+      usedCitations.push(citation)
+      if (retrievalCitation) hasRetrievalCitation = true
+      return `[${number}]`
+    }).replace(/\]\s*\[/g, '] [').replace(/[ \t]+([，。；：！？])/g, '$1').trim()
+    if ((!hasRetrievalCitation && retrieval.hits.length > 0) || /evidence\s+is\s+insufficient|证据不足/i.test(answer)) return { answer: '当前材料不足以回答这个问题。', citations: [], confidence: 'insufficient-evidence', retrievalMode, model: settings.chatModel }
+    return { answer: normalizedAnswer, citations: usedCitations, confidence: 'grounded', retrievalMode, model: settings.chatModel }
+  }
+
+  // Explains exactly one discovered relation. The result is never persisted
+  // and never changes relation status or direction chosen by a human.
+  async explainMaterialRelation(relationId: string): Promise<RelationAiExplanationResult> {
+    const failure = (reason: RelationAiExplanationFailureReason, message: string): RelationAiExplanationResult => ({ ok: false, reason, message })
+    const relation = this.workspace.getMaterialRelation(relationId)
+    if (!relation) throw new Error('Material relationship not found.')
+    const source = this.workspace.getMaterial(relation.sourceMaterialId); const target = this.workspace.getMaterial(relation.targetMaterialId)
+    if (!source || !target) throw new Error('Relationship material is unavailable.')
+    const settings = this.workspace.getSettings()
+    if (!settings.enabled || !settings.chatModel) return failure('not-configured', '请先在设置中启用 AI 并选择聊天模型。')
+    if (settings.provider !== 'ollama' && !settings.allowCloud) return failure('no-consent', '使用云端模型解释关系前，请在设置中明确同意云端处理。')
+    // Context window: at most 2 chunks per side, 500 characters each.
+    const windows = (materialId: string) => this.workspace.materialEvidenceWindow(materialId, `${source.title} ${target.title}`, 1).slice(0, 2).map((chunk) => ({ heading: chunk.heading, text: chunk.text.slice(0, 500) }))
+    const prompt = `Explain or reject exactly one locally discovered relationship. Use only the supplied evidence. Return ONLY JSON: {"supported":true,"sourceMaterialId":"${source.id}","targetMaterialId":"${target.id}","relationType":"references|depends_on|evidences|implements|tests|related","label":"short Chinese label","explanation":"one concise Chinese explanation","confidence":0.0}. Keep the supplied direction unless evidence clearly supports reversing it. Local evidence: ${JSON.stringify(relation.evidence.map((item) => item.text))}. Source: ${JSON.stringify({ id: source.id, title: source.title, excerpts: windows(source.id) })}. Target: ${JSON.stringify({ id: target.id, title: target.title, excerpts: windows(target.id) })}`
+    let response: Response
+    try { response = await this.chat(this.profileFor(settings), settings.chatModel, prompt, true) } catch (error) {
+      if (error instanceof DOMException && (error.name === 'TimeoutError' || error.name === 'AbortError')) return failure('timeout', 'AI 解释请求超时，请稍后重试。')
+      return failure('provider-error', 'AI 服务配置不完整或暂时无法连接。')
+    }
+    if (!response.ok) return failure('provider-error', `AI 服务返回错误（HTTP ${response.status}），请稍后重试。`)
+    let parsed: Record<string, unknown>
+    try { parsed = this.parseExplanationJson(this.responseText(await this.responseJson(response, 'AI explanation'))) } catch { return failure('invalid-json', 'AI 返回的结果无法解析，本地证据仍可查看。') }
+    const sourceMaterialId = String(parsed.sourceMaterialId ?? relation.sourceMaterialId); const targetMaterialId = String(parsed.targetMaterialId ?? relation.targetMaterialId)
+    const allowed = new Set([relation.sourceMaterialId, relation.targetMaterialId])
+    if (!allowed.has(sourceMaterialId) || !allowed.has(targetMaterialId) || sourceMaterialId === targetMaterialId) return failure('invalid-json', 'AI 返回了无法校验的材料标识，已忽略本次解释。')
+    const relationTypes = new Set(['references', 'depends_on', 'evidences', 'implements', 'tests', 'related'])
+    return { ok: true, supported: Boolean(parsed.supported), sourceMaterialId, targetMaterialId, relationType: typeof parsed.relationType === 'string' && relationTypes.has(parsed.relationType) ? parsed.relationType : relation.relationType, label: String(parsed.label ?? '关联').slice(0, 48), explanation: String(parsed.explanation ?? '本地证据不足以补充说明。').slice(0, 600), confidence: Math.max(0, Math.min(1, Number(parsed.confidence) || relation.score)) }
+  }
+
+  // Strict parse first; one repair attempt extracts the outermost {...} block.
+  private parseExplanationJson(text: string): Record<string, unknown> {
+    const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim()
+    try { return JSON.parse(cleaned) as Record<string, unknown> } catch { return parseJsonObject(cleaned) }
   }
 
   /** The board is changed only after every candidate has been evidence-checked. */
-  private async runTopicAnalysisV2(topicId: string): Promise<AnalysisSummary> {
+  private async runTopicAnalysisV2(topicId: string, signal: AbortSignal): Promise<AnalysisSummary> {
     const map = this.workspace.topicMap(topicId); const settings = this.workspace.getSettings()
     if (!map.materials.length) throw new Error('Add materials to this topic before analysis.')
     if (!settings.enabled || !settings.chatModel) throw new Error('Enable analysis and select a chat model in workspace settings first.')
@@ -164,15 +257,18 @@ export class AiService {
     const jobs = map.materials.map((material) => ({ materialId: material.id, jobId: this.workspace.startJob(material.id, 'ai-analysis') }))
     try {
       const cards = this.materialCards(map, settings.chatModel)
-      const candidateBatches = this.candidateBatches(cards)
-      this.workspace.updateTopicAnalysisRun(run.id, { stage: 'candidates', completed: 0, total: candidateBatches.length, summary: `Material cards ready: ${cards.length}.` })
-      const candidates = await this.requestTopicCandidates(settings, map, candidateBatches, (completed) => this.workspace.updateTopicAnalysisRun(run.id, { completed, total: candidateBatches.length }))
+      this.workspace.updateTopicAnalysisRun(run.id, { stage: 'candidates', completed: 0, total: cards.length, summary: `Scanning local material index: ${cards.length} cards.` })
+      const candidateStore = (this.workspace as unknown as { listTopicCandidates?: (id: string) => Array<{ sourceMaterialId: string; targetMaterialId: string; sharedTags: string[]; score: number; status: string }> }).listTopicCandidates
+      const persisted = candidateStore?.(topicId)
+      const candidates = persisted ? persisted.filter((candidate) => candidate.status === 'visible').slice(0, 8).map((candidate) => ({ sourceMaterialId: candidate.sourceMaterialId, targetMaterialId: candidate.targetMaterialId, relationType: 'related', label: candidate.sharedTags[0] ?? '关联', confidence: Math.min(.9, candidate.score), evidence: '', sourceChunkIds: [], targetChunkIds: [] })) : this.localTopicCandidates(map, cards)
+      this.workspace.updateTopicAnalysisRun(run.id, { completed: cards.length, total: cards.length, summary: `Selected ${candidates.length} local relationship candidates.` })
       this.workspace.updateTopicAnalysisRun(run.id, { stage: 'verifying', completed: 0, total: candidates.length })
       const verified: TopicRelationCandidate[] = []; let rejected = 0
       // A small pool keeps cloud/local providers responsive without turning a
       // large topic into thirty serialized network round trips.
-      for (let offset = 0; offset < candidates.length; offset += 3) {
-        const batch = await Promise.all(candidates.slice(offset, offset + 3).map((candidate) => this.verifyTopicCandidate(settings, map, candidate)))
+      for (let offset = 0; offset < candidates.length; offset += 6) {
+        if (signal.aborted) throw new DOMException('Analysis cancelled by user.', 'AbortError')
+        const batch = await Promise.all(candidates.slice(offset, offset + 6).map((candidate) => this.verifyTopicCandidate(settings, map, candidate, signal)))
         for (const result of batch) { if (result) verified.push(result); else rejected += 1 }
         this.workspace.updateTopicAnalysisRun(run.id, { completed: Math.min(offset + batch.length, candidates.length), rejectedCandidates: rejected })
       }
@@ -181,7 +277,7 @@ export class AiService {
       jobs.forEach((job) => this.workspace.finishJob(job.jobId))
       this.workspace.updateTopicAnalysisRun(run.id, { stage: 'complete', completed: summary.processed, total: summary.processed, addedRelations: summary.addedRelations, rejectedCandidates: rejected, summary: summary.addedRelations ? `Created ${summary.addedRelations} evidence-backed AI relationships.` : 'No sufficiently supported relationships were found.' })
       return summary
-    } catch (error) { const message = error instanceof Error ? error.message : 'Analysis failed.'; jobs.forEach((job) => this.workspace.failJob(job.jobId, message)); this.workspace.updateTopicAnalysisRun(run.id, { stage: 'failed', error: message }); throw error }
+    } catch (error) { const cancelled = signal.aborted || (error instanceof DOMException && error.name === 'AbortError'); const message = cancelled ? 'Analysis cancelled by user.' : error instanceof Error ? error.message : 'Analysis failed.'; jobs.forEach((job) => this.workspace.failJob(job.jobId, message)); this.workspace.updateTopicAnalysisRun(run.id, { stage: cancelled ? 'cancelled' : 'failed', error: message, summary: cancelled ? 'Analysis was cancelled before changes were applied.' : undefined }); throw error }
   }
 
   private async embed(texts: string[]): Promise<number[][] | null> {
@@ -232,37 +328,46 @@ export class AiService {
       const cached = this.workspace.getMaterialAnalysisCard(material.id, modelId); if (cached) return cached
       const chunks = this.workspace.listMaterialChunks(material.id); const headings = [...new Set(chunks.map((chunk) => chunk.heading).filter((heading): heading is string => Boolean(heading)))].slice(0, 6)
       const keyChunks = chunks.slice(0, 3); const keywords = [...new Set(`${material.title} ${headings.join(' ')} ${keyChunks.map((chunk) => chunk.text.slice(0, 180)).join(' ')}`.match(/[\\p{L}\\p{N}_-]{2,}/gu) ?? [])].slice(0, 12)
-      const card: MaterialAnalysisCard = { materialId: material.id, contentHash: material.hash ?? chunkHash(material.extractedText ?? material.excerpt ?? material.title), modelId, title: material.title, date: material.occurredAt ?? material.importedAt, headings, keywords, evidenceChunkIds: keyChunks.map((chunk) => chunk.id), summary: [material.excerpt, headings.length ? `Sections: ${headings.join(' / ')}` : '', keywords.length ? `Keywords: ${keywords.join(', ')}` : ''].filter(Boolean).join('\\n').slice(0, 900), generatedAt: new Date().toISOString() }
+      const card: MaterialAnalysisCard = { materialId: material.id, contentHash: material.hash ?? chunkHash(material.extractedText ?? material.excerpt ?? material.title), modelId, title: material.title, date: material.occurredAt ?? material.importedAt, headings, keywords, evidenceChunkIds: keyChunks.map((chunk) => chunk.id), summary: [material.excerpt, headings.length ? `Sections: ${headings.join(' / ')}` : '', keywords.length ? `Keywords: ${keywords.join(', ')}` : ''].filter(Boolean).join('\\n').slice(0, 480), generatedAt: new Date().toISOString() }
       this.workspace.saveMaterialAnalysisCard(card); return card
     })
   }
-  private candidateBatches(cards: MaterialAnalysisCard[]): MaterialAnalysisCard[][] {
-    const batches: MaterialAnalysisCard[][] = []
-    for (let offset = 0; offset < cards.length; offset += 6) {
-      const current = cards.slice(offset, offset + 6)
-      if (offset > 0 && cards[offset - 1]) current.unshift(cards[offset - 1])
-      batches.push(current)
+  private localTopicCandidates(map: TopicMap, cards: MaterialAnalysisCard[]): TopicRelationCandidate[] {
+    const documentTerms = cards.map((card) => new Set(this.localTerms(`${card.title} ${card.headings.join(' ')} ${card.keywords.join(' ')} ${card.summary}`)))
+    const frequency = new Map<string, number>(); documentTerms.forEach((terms) => terms.forEach((term) => frequency.set(term, (frequency.get(term) ?? 0) + 1)))
+    const pairs: Array<{ left: number; right: number; score: number }> = []
+    for (let left = 0; left < cards.length; left += 1) for (let right = left + 1; right < cards.length; right += 1) {
+      const shared = [...documentTerms[left]].filter((term) => documentTerms[right].has(term) && (frequency.get(term) ?? 0) < cards.length * .7)
+      const score = shared.reduce((total, term) => total + Math.log((cards.length + 1) / ((frequency.get(term) ?? 0) + 1)), 0)
+      if (score >= .9) pairs.push({ left, right, score })
     }
-    return batches
+    if (!pairs.length && map.materials.length === 2) pairs.push({ left: 0, right: 1, score: .25 })
+    return pairs.sort((left, right) => right.score - left.score).slice(0, 8).map((pair) => ({ sourceMaterialId: cards[pair.left].materialId, targetMaterialId: cards[pair.right].materialId, relationType: 'related', label: '关联', confidence: Math.min(.75, .25 + pair.score / 8), evidence: '', sourceChunkIds: [], targetChunkIds: [] }))
   }
-  private async requestTopicCandidates(settings: ModelSettings, map: TopicMap, batches: MaterialAnalysisCard[][], onBatchComplete: (completed: number) => void): Promise<TopicRelationCandidate[]> {
+  private localTerms(value: string): string[] {
+    const words = value.toLocaleLowerCase().match(/[a-z0-9_-]{3,}/g) ?? []
+    const cjk = [...value.replace(/[^\u4e00-\u9fff]/g, '')].flatMap((_char, index, chars) => index < chars.length - 1 ? [`${chars[index]}${chars[index + 1]}`] : [])
+    return [...new Set([...words, ...cjk])]
+  }
+  private async requestTopicCandidates(settings: ModelSettings, map: TopicMap, batches: MaterialAnalysisCard[][], onBatchComplete: (completed: number) => void, signal?: AbortSignal): Promise<TopicRelationCandidate[]> {
     const raw: Array<Partial<TopicRelationCandidate>> = []
-    for (const [index, cards] of batches.entries()) {
-      const prompt = `${this.readSkill('topic-connection.md')}\\nCandidate batch ${index + 1}/${batches.length}: propose at most ${Math.min(10, Math.max(3, cards.length))} directed candidates from compact material cards. Do not force every material into a tree. Return ONLY JSON: {\"relations\":[{\"sourceMaterialId\":\"id\",\"targetMaterialId\":\"id\",\"relationType\":\"next|depends_on|explains|evidences|implements|tests|blocks|improves|reviews|references|related\",\"label\":\"short\",\"confidence\":0.0}]}. Cards: ${JSON.stringify(cards.map(({ materialId, title, date, headings, keywords, summary }) => ({ materialId, title, date, headings, keywords, summary })))} `
-      const response = await this.chat(this.profileFor(settings), settings.chatModel, prompt, true)
+    let completed = 0
+    await Promise.all(batches.map(async (cards, index) => {
+      const prompt = `${this.readSkill('topic-connection.md')}\\nCandidate batch ${index + 1}/${batches.length}: propose at most ${Math.min(8, Math.max(3, cards.length))} directed candidates from compact material cards. Do not force every material into a tree. Return ONLY JSON: {\"relations\":[{\"sourceMaterialId\":\"id\",\"targetMaterialId\":\"id\",\"relationType\":\"next|depends_on|explains|evidences|implements|tests|blocks|improves|reviews|references|related\",\"label\":\"short\",\"confidence\":0.0}]}. Cards: ${JSON.stringify(cards.map(({ materialId, title, date, headings, keywords, summary }) => ({ materialId, title, date, headings, keywords, summary })))} `
+      const response = await this.chat(this.profileFor(settings), settings.chatModel, prompt, true, signal)
       if (!response.ok) throw new Error(`Candidate batch ${index + 1}/${batches.length} returned HTTP ${response.status}.`)
       const parsed = parseJsonObject(this.responseText(await this.responseJson(response, `Candidate batch ${index + 1}`))) as { relations?: Array<Partial<TopicRelationCandidate>> }
-      raw.push(...(parsed.relations ?? [])); onBatchComplete(index + 1)
-    }
+      raw.push(...(parsed.relations ?? [])); completed += 1; onBatchComplete(completed)
+    }))
     const ids = new Set(map.materials.map((material) => material.id)); const seen = new Set<string>()
-    return raw.flatMap((relation) => { const source = String(relation.sourceMaterialId ?? ''); const target = String(relation.targetMaterialId ?? ''); const key = `${source}:${target}`; if (!ids.has(source) || !ids.has(target) || source === target || seen.has(key)) return []; seen.add(key); return [{ sourceMaterialId: source, targetMaterialId: target, relationType: typeof relation.relationType === 'string' && relation.relationType in workflowRelations ? relation.relationType : 'related', label: String(relation.label ?? '').slice(0, 48), confidence: Math.max(0, Math.min(1, Number(relation.confidence) || 0)), evidence: '', sourceChunkIds: [], targetChunkIds: [] }] }).slice(0, 30)
+    return raw.flatMap((relation) => { const source = String(relation.sourceMaterialId ?? ''); const target = String(relation.targetMaterialId ?? ''); const key = `${source}:${target}`; if (!ids.has(source) || !ids.has(target) || source === target || seen.has(key)) return []; seen.add(key); return [{ sourceMaterialId: source, targetMaterialId: target, relationType: typeof relation.relationType === 'string' && relation.relationType in workflowRelations ? relation.relationType : 'related', label: String(relation.label ?? '').slice(0, 48), confidence: Math.max(0, Math.min(1, Number(relation.confidence) || 0)), evidence: '', sourceChunkIds: [], targetChunkIds: [] }] }).sort((left, right) => right.confidence - left.confidence).slice(0, 8)
   }
-  private async verifyTopicCandidate(settings: ModelSettings, map: TopicMap, candidate: TopicRelationCandidate): Promise<TopicRelationCandidate | null> {
+  private async verifyTopicCandidate(settings: ModelSettings, map: TopicMap, candidate: TopicRelationCandidate, signal?: AbortSignal): Promise<TopicRelationCandidate | null> {
     const source = map.materials.find((material) => material.id === candidate.sourceMaterialId); const target = map.materials.find((material) => material.id === candidate.targetMaterialId); if (!source || !target) return null
-    const query = `${source.title} ${target.title}`; const left = this.workspace.materialEvidenceWindow(source.id, query); const right = this.workspace.materialEvidenceWindow(target.id, query); if (!left.length || !right.length) return null
-    const prompt = `Verify one proposed directed relation using only the evidence excerpts. Return ONLY JSON: {\"accept\":true,\"relationType\":\"next|depends_on|explains|evidences|implements|tests|blocks|improves|reviews|references|related\",\"label\":\"short\",\"confidence\":0.0,\"evidence\":\"specific support from both excerpts\"}. Or return {\"accept\":false}. Proposed: ${JSON.stringify(candidate)}. Source: ${JSON.stringify(left)}. Target: ${JSON.stringify(right)}`
-    const response = await this.chat(this.profileFor(settings), settings.chatModel, prompt, true); if (!response.ok) return null
-    try { const result = parseJsonObject(this.responseText(await this.responseJson(response, 'Relation verification'))) as { accept?: boolean; relationType?: string; label?: string; confidence?: number; evidence?: string }; if (!result.accept || !result.evidence?.trim()) return null; return { ...candidate, relationType: result.relationType && result.relationType in workflowRelations ? result.relationType : candidate.relationType, label: String(result.label ?? candidate.label ?? '').slice(0, 48), confidence: Math.max(0, Math.min(1, Number(result.confidence) || candidate.confidence)), evidence: result.evidence.trim().slice(0, 1600), sourceChunkIds: left.map((chunk) => chunk.id), targetChunkIds: right.map((chunk) => chunk.id) } } catch { return null }
+    const query = `${source.title} ${target.title}`; const compact = (materialId: string) => this.workspace.materialEvidenceWindow(materialId, query, 1).slice(0, 2).map((chunk) => ({ ...chunk, text: chunk.text.slice(0, 500) })); const left = compact(source.id); const right = compact(target.id); if (!left.length || !right.length) return null
+    const prompt = `Verify whether these two materials have a meaningful relationship using only the evidence excerpts. Decide the supported direction; it may be either material A -> B or B -> A. Return ONLY JSON: {\"accept\":true,\"sourceMaterialId\":\"one supplied id\",\"targetMaterialId\":\"the other supplied id\",\"relationType\":\"next|depends_on|explains|evidences|implements|tests|blocks|improves|reviews|references|related\",\"label\":\"short Chinese relation label\",\"confidence\":0.0,\"evidence\":\"specific support from both excerpts\"}. Or return {\"accept\":false}. Material A: ${JSON.stringify({ id: source.id, excerpts: left })}. Material B: ${JSON.stringify({ id: target.id, excerpts: right })}`
+    const response = await this.chat(this.profileFor(settings), settings.chatModel, prompt, true, signal); if (!response.ok) return null
+    try { const result = parseJsonObject(this.responseText(await this.responseJson(response, 'Relation verification'))) as { accept?: boolean; sourceMaterialId?: string; targetMaterialId?: string; relationType?: string; label?: string; confidence?: number; evidence?: string }; const allowed = new Set([source.id, target.id]); const nextSource = String(result.sourceMaterialId ?? candidate.sourceMaterialId); const nextTarget = String(result.targetMaterialId ?? candidate.targetMaterialId); if (!result.accept || !result.evidence?.trim() || !allowed.has(nextSource) || !allowed.has(nextTarget) || nextSource === nextTarget) return null; return { ...candidate, sourceMaterialId: nextSource, targetMaterialId: nextTarget, relationType: result.relationType && result.relationType in workflowRelations ? result.relationType : candidate.relationType, label: String(result.label ?? candidate.label ?? '').slice(0, 48), confidence: Math.max(0, Math.min(1, Number(result.confidence) || candidate.confidence)), evidence: result.evidence.trim().slice(0, 1600), sourceChunkIds: left.map((chunk) => chunk.id), targetChunkIds: right.map((chunk) => chunk.id) } } catch { return null }
   }
   private topicPositions(map: TopicMap, relations: TopicRelationCandidate[]): Array<{ materialId: string; x: number; y: number }> {
     const depth = new Map(map.materials.map((material) => [material.id, 0])); for (let pass = 0; pass < map.materials.length; pass += 1) for (const relation of relations) depth.set(relation.targetMaterialId, Math.max(depth.get(relation.targetMaterialId) ?? 0, (depth.get(relation.sourceMaterialId) ?? 0) + 1))
@@ -342,14 +447,15 @@ export class AiService {
     } catch (error) { lastError = error instanceof Error ? error.message : lastError }
     throw new Error(lastError)
   }
-  private async chat(profile: ProviderProfile, model: string, prompt: string, json: boolean): Promise<Response> {
+  private async chat(profile: ProviderProfile, model: string, prompt: string, json: boolean, parentSignal?: AbortSignal): Promise<Response> {
     const base = profile.baseUrl.replace(/\/$/, ''); const headers = { 'Content-Type': 'application/json', ...this.headers(profile) }
-    const signal = AbortSignal.timeout(90_000)
-    if (profile.provider === 'ollama') return fetch(`${base}/api/generate`, { method: 'POST', headers, signal, body: JSON.stringify({ model, prompt, stream: false, ...(json ? { format: 'json' } : {}) }) })
-    if (profile.provider === 'anthropic') return fetch(`${base}/messages`, { method: 'POST', headers, signal, body: JSON.stringify({ model, max_tokens: 1600, messages: [{ role: 'user', content: prompt }] }) })
-    if (profile.provider === 'gemini') return fetch(`${base}/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(this.appStore.getApiKey(profile.id) ?? '')}`, { method: 'POST', headers, signal, body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: json ? { responseMimeType: 'application/json' } : {} }) })
-    if (profile.wireApi === 'responses') return fetch(`${base}/responses`, { method: 'POST', headers, signal, body: JSON.stringify({ model, input: prompt, store: false, ...(json ? { text: { format: { type: 'json_object' } } } : {}) }) })
-    return fetch(`${base}/chat/completions`, { method: 'POST', headers, signal, body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], ...(json ? { response_format: { type: 'json_object' } } : {}) }) })
+    const timeout = AbortSignal.timeout(90_000); const signal = parentSignal ? AbortSignal.any([timeout, parentSignal]) : timeout
+    const maxTokens = json ? 450 : 1000
+    if (profile.provider === 'ollama') return fetch(`${base}/api/generate`, { method: 'POST', headers, signal, body: JSON.stringify({ model, prompt, stream: false, options: { num_predict: maxTokens, temperature: json ? 0.1 : 0.3 }, ...(json ? { format: 'json' } : {}) }) })
+    if (profile.provider === 'anthropic') return fetch(`${base}/messages`, { method: 'POST', headers, signal, body: JSON.stringify({ model, max_tokens: maxTokens, messages: [{ role: 'user', content: prompt }], ...(json ? { temperature: 0.1 } : {}) }) })
+    if (profile.provider === 'gemini') return fetch(`${base}/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(this.appStore.getApiKey(profile.id) ?? '')}`, { method: 'POST', headers, signal, body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: { maxOutputTokens: maxTokens, ...(json ? { temperature: 0.1, responseMimeType: 'application/json' } : {}) } }) })
+    if (profile.wireApi === 'responses') return fetch(`${base}/responses`, { method: 'POST', headers, signal, body: JSON.stringify({ model, input: prompt, store: false, max_output_tokens: maxTokens, ...(json ? { temperature: 0.1, text: { format: { type: 'json_object' } } } : {}) }) })
+    return fetch(`${base}/chat/completions`, { method: 'POST', headers, signal, body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], max_tokens: maxTokens, ...(json ? { temperature: 0.1, response_format: { type: 'json_object' } } : {}) }) })
   }
   private responseText(body: Record<string, unknown>): string {
     const direct = typeof body.output_text === 'string' ? body.output_text : undefined
