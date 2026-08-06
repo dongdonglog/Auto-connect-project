@@ -23,6 +23,8 @@
 ---
 
 > **当前版本：v1.0.0 正式版。** 核心闭环（导入 → 探索 → 固定 → 画板编辑 → 材料问答）已可运行。项目保持本地优先，AI 和 Agent 能力均由用户主动启用。
+>
+> **版本说明：** 当前版本仅提供中文界面，暂未提供国际化/英文版；桌面安装包支持 Windows 10/11 和 macOS（DMG/ZIP）。Linux 支持在后续版本规划中。
 
 ## 为什么需要 Material Map？
 
@@ -80,28 +82,39 @@ Material Map 不做一个「全自动知识图谱」，而是做一个**探索�
 
 从 [Releases](https://github.com/dongdonglog/Auto-connect-project/releases) 页面下载最新安装包：
 
-- **NSIS 安装版** (`Material-Map-Setup-x.x.x.exe`)：标准安装，支持自定义安装路径
-- **Portable 便携版** (`Material-Map-x.x.x.exe`)：解压即用，无需安装
+- **Windows NSIS 安装版** (`Material-Map-Setup-x.x.x.exe`)：标准安装，支持自定义安装路径
+- **Windows Portable 便携版** (`Material-Map-x.x.x.exe`)：解压即用，无需安装
+- **macOS DMG** (`Material-Map-x.x.x.dmg`)：挂载后拖入 Applications
+- **macOS ZIP** (`Material-Map-x.x.x-mac.zip`)：解压后将应用移入 Applications
 
-> 当前仅支持 Windows 10/11。macOS 和 Linux 支持在后续版本规划中。
+> macOS 首次打开若出现安全提示，请在「系统设置 → 隐私与安全性」中允许打开。当前版本未提供 Apple Developer ID 签名和公证。
 
 ### 基本使用
 
-```
-1. 启动应用 → 创建或打开工作区
-2. 导入本地文件夹或拖入文件
-3. 在工作台点击任意材料 → 进入「探索」
-4. 右侧查看关联材料及证据 → 固定感兴趣的、隐藏不相关的
-5. 固定的关系进入「主题画板」→ 手动编辑、连线、布局
-6. 在「问答」中配置 AI 后提问；Agent 会按问题选择材料目录、全文检索、关系和主题工具，结果显示实际模型与来源
-```
+1. **启动并创建工作区**：首次启动选择「创建工作区」，指定一个专门的本地目录；已有工作区可直接选择「打开工作区」。
+2. **导入材料**：在工作台点击导入按钮，选择文件夹或多个文件，也可以把文件拖入窗口。支持 Markdown、TXT、CSV、JSON、HTML、PDF、DOCX。
+3. **等待索引完成**：导入队列会显示解析和索引进度。文件内容、标题、路径和可识别实体会写入当前工作区的本地数据库，原始文件不会被复制或上传。
+4. **阅读单份材料**：在材料列表中点击文件，中央阅读器显示内容；失联文件会保留快照，并标记原始路径已不可用。
+5. **探索关系**：切换到「探索」，右侧会列出与当前材料相关的文件。展开一条关系可查看来源文件、匹配片段和证据位置，点击证据可以跳回原文。
+6. **筛选关系**：对有价值的关系选择「固定」，对明显无关的关系选择「隐藏」。系统会保留你的选择，不会在下一次索引时覆盖手动确认的关系。
+7. **整理主题画板**：进入「主题画板」查看固定关系。拖动材料卡片调整布局，从卡片四边端口创建关系，编辑关系标签、方向、颜色和线型；支持多选、删除以及撤销/重做。
+8. **按主题继续阅读**：在画板中选中材料或关系，可回到阅读器查看原文和证据；也可以从材料菜单继续进入关系探索。
+9. **启用材料问答（可选）**：进入「问答」并填写兼容 OpenAI API 的模型地址、模型名和 API Key。AI 默认关闭，只有你主动发送问题时才会调用；回答会显示实际使用的模型和引用来源。
+10. **使用 Agent（可选）**：配置后，Agent 会根据问题调用材料目录、全文检索、关系和主题工具。涉及画板修改时只生成待审核提案，确认后才会写入画板。
+11. **备份和迁移**：在工作区菜单中导出工作区包，按需启用加密；在另一台设备选择「恢复工作区」即可导入。请将导出包和 API Key 保存在安全位置。
+
+### 界面示例
+
+下面是当前版本的 README/产品界面预览。图片已经随仓库提交，GitHub 无需访问临时文件路径：
+
+![Material Map 界面示例](./docs/screenshots/readme-preview.png)
 
 ## 开发指南
 
 ### 环境要求
 
 - **Node.js** 24+
-- **操作系统** Windows 10/11（开发可在 macOS/Linux 进行，但打包仅支持 Windows）
+- **操作系统** Windows 10/11 或 macOS 12+
 
 ### 本地开发
 
@@ -129,11 +142,13 @@ npm run dev
 | `npm run build` | 生产构建 |
 | `npm run build:mcp` | 构建 Material Map stdio MCP 服务 |
 | `npm run mcp -- /path/to/workspace` | 为指定工作区启动 MCP 服务 |
-| `npm run package` | 构建 + 打包 Windows 安装包 |
+| `npm run package` | 默认构建 Windows 安装包（兼容旧流程） |
+| `npm run package:win` | 构建 Windows x64（Intel/AMD）NSIS + Portable 安装包 |
+| `npm run package:mac` | 构建 macOS arm64（Apple Silicon）DMG + ZIP 安装包 |
 
 ### GitHub Actions 构建与发布
 
-仓库中的 `.github/workflows/windows-package.yml` 会在 `main`、`develop` 或 `feat/develop` 分支有新提交时，在 Windows Runner 上构建，并把安装包上传到对应的 Actions 运行记录中（保留 14 天）。
+仓库中的 `.github/workflows/windows-package.yml` 会在 `main`、`develop` 或 `feat/develop` 分支有新提交时，分别构建 Windows x64（Intel/AMD）和 macOS arm64（Apple Silicon）产物，并把两组 artifact 上传到对应的 Actions 运行记录中（保留 14 天）。打包和发布是独立步骤，打包不需要配置个人访问令牌。
 
 正式版本使用 `vMAJOR.MINOR.PATCH` 标签。当前稳定版为 `v1.0.0`：
 
@@ -142,7 +157,7 @@ git tag v1.0.0
 git push origin v1.0.0
 ```
 
-标签构建成功后，工作流会自动创建 GitHub Release，并附上 NSIS 安装版、Portable 版及更新元数据。`v1.0.0-alpha.1` 和 `v1.0.0-beta.1` 会先运行测试并标记为预发布；稳定版标签（例如 `v1.0.0`）直接构建和打包，不运行 GitHub Actions 测试。若 Release 创建权限被仓库策略禁止，请在 **Settings → Actions → General → Workflow permissions** 中允许工作流读写仓库内容。
+标签构建成功后，工作流会自动创建 GitHub Release，并附上 Windows NSIS/Portable、macOS DMG/ZIP 及对应更新元数据。`v1.0.0-alpha.1` 和 `v1.0.0-beta.1` 会先运行测试并标记为预发布；稳定版标签（例如 `v1.0.0`）直接构建和打包，不运行 GitHub Actions 测试。若 Release 创建权限被仓库策略禁止，请在 **Settings → Actions → General → Workflow permissions** 中允许工作流读写仓库内容。
 
 ## 技术栈
 
@@ -237,7 +252,7 @@ git push origin v1.0.0
 ### 未来版本
 
 - 阅读路径自动生成
-- macOS / Linux 支持
+- Linux 支持
 - 跨工作区关系查询
 - 受限 Agent 自动补全（需用户确认）
 
