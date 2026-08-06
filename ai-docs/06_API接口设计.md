@@ -1,6 +1,6 @@
 # 06 API 接口设计
 
-状态：0.1 不提供网络 API。本文中的 API 是 Electron renderer 经 preload 调用 main process 的 IPC 契约。
+状态：0.1 不提供网络 API。应用内 API 是 Electron renderer 经 preload 调用 main process 的 IPC 契约；同一组受限材料工具另提供 stdio MCP 适配器。
 
 ## 1. 契约原则
 
@@ -41,16 +41,23 @@ ai.explainRelation(relationId: string): Promise<RelationAiExplanation>
 | `relations:create` | `Omit<Relation, id, createdAt>` | 建立正式关系，拒绝自环与同来源同方向重复 |
 | `topics:updateRelationStyle` | topicId, relationId, style | 保存箭头、线型、颜色、source/target handle |
 | `topics:positionMaterial` | topicId, materialId, x, y | 保存手动位置 |
+| `topics:proposals` | topicId | 读取当前主题的待审核 Agent 操作 |
+| `topics:acceptProposal` | topicId, proposalId | 校验并通过可撤销画板命令应用提案 |
+| `topics:archiveProposal` | topicId, proposalId | 忽略提案，不修改正式数据 |
 
 四边端口值使用 `in-left/out-left/in-top/out-top/in-right/out-right/in-bottom/out-bottom`。连接的 source/target 和 handle 都必须持久化。
 
 ## 5. 搜索与 AI 接口
 
 - `search(query)`：返回 `SearchHit[]`，FTS 优先，可选 hybrid。
-- `ai:ask(question)`：返回 `GroundedAnswer`；没有命中时返回 `insufficient-evidence`，不虚构回答。
+- `ai:ask(question)`：返回 `GroundedAnswer`；区分 `workspace`、`general` 和 `action`，并返回实际模型及工具调用记录。
 - `ai:explainRelation(relationId)`：返回 `RelationAiExplanation`，仅解释该关系，不写入或修改正式关系。
-- 旧批量主题分析与主题工具仅保留历史数据兼容，不提供 renderer、preload 或公开 IPC 入口。
+- `ai:tools:list` / `ai:tools:call`：列出或调用受限 Material Map 工具；API Key 和数据库句柄不进入 renderer。
 
-## 6. 测试契约
+## 6. stdio MCP
+
+`npm run mcp -- /path/to/workspace` 启动 JSON-RPC stdio 服务，支持 `initialize`、`tools/list` 和 `tools/call`。工具按能力模块组织：材料目录/检索/读取、关系/证据、主题上下文，以及画板提案。MCP 与应用内 Agent 共用 `MaterialMapMcpServer` 的参数校验、返回预算和提案安全边界；`propose_topic_changes` 永远不会直接写正式关系、卡片或位置。用户只需用自然语言提问，由模型自行选择最少的相关模块。
+
+## 7. 测试契约
 
 每新增 channel 至少测试：preload 暴露、main handler 到 service 调用、非法 ID/枚举拒绝、旧工作区和未配置模型的失败路径。E2E 至少验证 create workspace、导入两份相关材料、读取关系、隐藏/固定关系。

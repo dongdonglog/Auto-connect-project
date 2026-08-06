@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="#"><img src="https://img.shields.io/badge/version-0.1.0-blue" alt="Version" /></a>
+  <a href="#"><img src="https://img.shields.io/badge/version-1.0.0-blue" alt="Version" /></a>
   <a href="#"><img src="https://img.shields.io/badge/platform-Windows%2010%2B-lightgrey" alt="Platform" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License" /></a>
   <img src="https://img.shields.io/badge/electron-33%2B-47848f?logo=electron" alt="Electron" />
@@ -22,7 +22,7 @@
 
 ---
 
-> **⚠️ 当前状态：0.1 MVP 开发中。** 核心闭环（导入 → 探索 → 固定 → 画板编辑）已可运行，部分功能仍在完善。详见 [发布路线图](#发布路线图)。
+> **当前版本：v1.0.0 正式版。** 核心闭环（导入 → 探索 → 固定 → 画板编辑 → 材料问答）已可运行。项目保持本地优先，AI 和 Agent 能力均由用户主动启用。
 
 ## 为什么需要 Material Map？
 
@@ -42,7 +42,7 @@ Material Map 不做一个「全自动知识图谱」，而是做一个**探索�
 | **核心交互** | 以材料为中心探索关系 | 以笔记为中心双向链接 | 以大纲为中心块引用 | 以聊天为中心的 RAG |
 | **关系发现** | 显式引用 + 受控实体，每条关系带证据 | 手动 `[[link]]` | 手动 `[[link]]` + 块引用 | AI 自动生成 |
 | **离线可用** | ✅ 无需网络 | ✅ | ✅ | ❌ 需要云端 |
-| **AI 角色** | 按需解释单条关系 | 社区插件 | 社区插件 | 核心依赖 AI |
+| **AI 角色** | 按需解释关系、材料问答与可审核 Agent 提案 | 社区插件 | 社区插件 | 核心依赖 AI |
 | **数据存储** | 本地 SQLite | 本地 Markdown 文件 | 本地 Markdown 文件 | 云端 |
 | **目标场景** | 技术文档、代码、项目资料的关系探索 | 个人知识管理 | 大纲式笔记 | 文档对话 |
 
@@ -70,7 +70,9 @@ Material Map 不做一个「全自动知识图谱」，而是做一个**探索�
 - AI **默认关闭**，你完全掌控何时调用
 - 单条关系请求解释时，仅发送该关系的紧凑证据窗口
 - AI 失败不影响本地探索、阅读和画板操作
-- 实验性材料问答（基于本地检索 + 引用回答）
+- DeepSeek/OpenAI-compatible Agent：可回答通用问题，也可检索材料、读取关系和主题上下文
+- 画板操作只生成待审核提案；用户应用后进入画板撤销/重做历史
+- 本地工具同时通过 Electron IPC 和 stdio MCP 暴露，便于 CLI 或外部 Agent 调用
 
 ## 快速开始
 
@@ -91,6 +93,7 @@ Material Map 不做一个「全自动知识图谱」，而是做一个**探索�
 3. 在工作台点击任意材料 → 进入「探索」
 4. 右侧查看关联材料及证据 → 固定感兴趣的、隐藏不相关的
 5. 固定的关系进入「主题画板」→ 手动编辑、连线、布局
+6. 在「问答」中配置 AI 后提问；Agent 会按问题选择材料目录、全文检索、关系和主题工具，结果显示实际模型与来源
 ```
 
 ## 开发指南
@@ -121,22 +124,25 @@ npm run dev
 | `npm run dev` | 启动 Electron 开发模式 |
 | `npx tsc --noEmit` | TypeScript 类型检查 |
 | `npm test` | 运行单元测试（Vitest） |
+| `npm run test:ci` | 运行 CI 业务测试（排除压力与演示测试） |
 | `npm run test:e2e` | 端到端测试（需先构建） |
 | `npm run build` | 生产构建 |
+| `npm run build:mcp` | 构建 Material Map stdio MCP 服务 |
+| `npm run mcp -- /path/to/workspace` | 为指定工作区启动 MCP 服务 |
 | `npm run package` | 构建 + 打包 Windows 安装包 |
 
 ### GitHub Actions 构建与发布
 
 仓库中的 `.github/workflows/windows-package.yml` 会在 `main`、`develop` 或 `feat/develop` 分支有新提交时，在 Windows Runner 上构建，并把安装包上传到对应的 Actions 运行记录中（保留 14 天）。
 
-要发布正式版本，给要发布的提交打一个 `v` 开头的标签：
+正式版本使用 `vMAJOR.MINOR.PATCH` 标签。当前稳定版为 `v1.0.0`：
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v1.0.0
+git push origin v1.0.0
 ```
 
-标签构建成功后，工作流会自动创建 GitHub Release，并附上 NSIS 安装版、Portable 版及更新元数据。若 Release 创建权限被仓库策略禁止，请在 **Settings → Actions → General → Workflow permissions** 中允许工作流读写仓库内容。
+标签构建成功后，工作流会自动创建 GitHub Release，并附上 NSIS 安装版、Portable 版及更新元数据。`v1.0.0-alpha.1` 和 `v1.0.0-beta.1` 会先运行测试并标记为预发布；稳定版标签（例如 `v1.0.0`）直接构建和打包，不运行 GitHub Actions 测试。若 Release 创建权限被仓库策略禁止，请在 **Settings → Actions → General → Workflow permissions** 中允许工作流读写仓库内容。
 
 ## 技术栈
 
@@ -162,7 +168,7 @@ git push origin v0.1.0
 │  ├─ Workbench    工作台          │
 │  ├─ Explorer     关系探索        │
 │  ├─ Topic Canvas 主题画板        │
-│  └─ Q&A          实验问答        │
+│  └─ Q&A          AI Agent 问答    │
 └────────────┬────────────────────┘
              │  typed preload IPC
 ┌────────────▼────────────────────┐
@@ -206,11 +212,11 @@ git push origin v0.1.0
 | [AI Pipeline](./ai-docs/05_AI_Pipeline设计.md) | 按需解释、问答与隐私约束 |
 | [API 接口](./ai-docs/06_API接口设计.md) | preload IPC 类型契约 |
 | [UI 交互](./ai-docs/07_UI交互设计.md) | 工作台、Explorer、画板和问答交互 |
-| [MVP 计划](./ai-docs/08_MVP开发计划.md) | 0.1 里程碑、验收与性能目标 |
+| [MVP 计划](./ai-docs/08_MVP开发计划.md) | 历史 MVP 里程碑、验收与性能目标 |
 
 ## 发布路线图
 
-### v0.1 MVP（当前）
+### v1.0.0 正式版（当前）
 
 - [x] 工作区创建、打开、导入导出与加密
 - [x] 材料导入与多格式解析（Markdown/PDF/DOCX/CSV 等）
@@ -218,10 +224,13 @@ git push origin v0.1.0
 - [x] 显式引用与实体共现关系发现
 - [x] Explorer 三栏探索（材料列表 / 阅读器 / 关联与证据）
 - [x] 主题画板（React Flow + 四边端口 + 手动连线）
-- [x] 可选 AI 解释与实验问答
+- [x] 可选 AI 解释与 AI Agent 材料问答
+- [x] Agent 按问题选择材料目录、全文检索、关系、主题和画板提案工具
+- [x] 画板对象选择、多选、右键菜单、样式、路径、删除与撤销/重做
+- [x] stdio MCP 服务，支持 CLI 或外部 Agent 访问受限材料工具
 - [x] 文件夹监听增量同步
 - [x] 加密工作区 UI 接入
-- [ ] Windows NSIS/portable 安装包验收
+- [ ] Windows NSIS/portable 安装包持续验收
 - [ ] 旧组件清理与 `App.tsx` 拆分
 - [ ] 大图性能压测与路由优化
 

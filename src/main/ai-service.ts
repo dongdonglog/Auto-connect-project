@@ -4,7 +4,8 @@ import { AppStore } from './app-store'
 import connectionSkill from './ai-skills/topic-connection.md?raw'
 import operationSkill from './ai-skills/topic-operation.md?raw'
 import { topicToolContext } from './topic-tools'
-import { chunkHash } from './indexer'
+import { chunkHash, tokenize } from './indexer'
+import { MaterialMapMcpServer } from './material-mcp'
 
 interface TopicAnalysisResult {
   workstreams?: Array<{ name: string; materialIds: string[] }>
@@ -20,27 +21,146 @@ const workspaceCatalogBudget = 24_000
 function workspaceCatalog(materials: Material[]): { hits: SearchHit[]; omitted: number } {
   const hits: SearchHit[] = []
   let used = 0
+  let omitted = 0
   for (const material of materials) {
-    const summary = String(material.excerpt ?? material.extractedText ?? '').replace(/\s+/g, ' ').trim().slice(0, 320)
-    const text = `Type: ${material.type}; Status: ${material.status}; Summary: ${summary || '(no extracted summary)'}`
-    const cost = material.id.length + material.title.length + text.length + 20
-    if (hits.length && used + cost > workspaceCatalogBudget) break
+    const summary = String(material.extractedText || material.excerpt || '').replace(/\s+/g, ' ').trim().slice(0, 420)
+    const expandedText = `Type: ${material.type}; Status: ${material.status}; Summary: ${summary || '(no extracted summary)'}`
+    const compactText = `Type: ${material.type}; Status: ${material.status}; Summary: (summary omitted from expanded context)`
+    const expandedCost = material.id.length + material.title.length + expandedText.length + 20
+    const compactCost = material.id.length + material.title.length + compactText.length + 20
+    const expand = !hits.length || used + expandedCost <= workspaceCatalogBudget
+    const text = expand ? expandedText : compactText
+    if (!expand) omitted += 1
     hits.push({ materialId: material.id, chunkId: 'catalog', title: material.title.slice(0, 240), text, score: 1, sourcePath: material.sourcePath, pageNumber: null, heading: null, availability: material.availability })
-    used += cost
+    used += expand ? expandedCost : compactCost
   }
-  return { hits, omitted: Math.max(0, materials.length - hits.length) }
+  return { hits, omitted }
+}
+
+type KnowledgeAnswerScope = 'workspace' | 'general' | 'action'
+interface ParsedKnowledgeResponse { answer: string; markers: string[]; scope?: KnowledgeAnswerScope }
+interface AgentToolCall { name: string; arguments: Record<string, unknown> }
+
+function sourceMarker(value: unknown): string | null {
+  if (typeof value === 'string') {
+    const match = value.match(/\[?([^:\]\s]+):([^\]\s]+)\]?/)
+    return match ? `${match[1]}:${match[2]}` : null
+  }
+  if (value && typeof value === 'object') {
+    const row = value as Record<string, unknown>
+    const materialId = String(row.materialId ?? row.material_id ?? '')
+    const chunkId = String(row.chunkId ?? row.chunk_id ?? '')
+    return materialId && chunkId ? `${materialId}:${chunkId}` : null
+  }
+  return null
+}
+
+function parseKnowledgeResponse(text: string): ParsedKnowledgeResponse {
+  const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim()
+  if (cleaned.startsWith('{') || cleaned.startsWith('"')) {
+    try {
+      const parsed = parseJsonObject(cleaned)
+      const answer = String(parsed.answer ?? parsed.response ?? parsed.content ?? '').trim()
+      const values = Array.isArray(parsed.sources) ? parsed.sources : Array.isArray(parsed.citations) ? parsed.citations : []
+      const markers = values.map(sourceMarker).filter((marker): marker is string => Boolean(marker))
+      const scope = ['workspace', 'general', 'action'].includes(String(parsed.scope)) ? String(parsed.scope) as KnowledgeAnswerScope : undefined
+      // A valid but empty JSON answer is still an empty model response. Keep
+      // it empty so the retry/local-evidence path can recover instead of
+      // rendering the raw `{}` object as if it were an answer.
+      return { answer, markers, scope }
+    } catch { /* Older providers often ignore the JSON instruction; plain text remains supported. */ }
+  }
+  return { answer: text.trim(), markers: [] }
+}
+
+function parseAgentInstruction(text: string): { kind: 'tool'; call: AgentToolCall } | { kind: 'final' } | null {
+  const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim()
+  if (!cleaned.startsWith('{') && !cleaned.startsWith('"')) return null
+  try {
+    const parsed = parseJsonObject(cleaned)
+    const type = String(parsed.type ?? parsed.kind ?? '').toLocaleLowerCase()
+    const name = String(parsed.name ?? parsed.tool ?? '').trim()
+    const rawArguments = parsed.arguments ?? parsed.args ?? parsed.input ?? {}
+    if ((type === 'tool_call' || type === 'tool' || (name && !('answer' in parsed))) && name) {
+      const argumentsValue = rawArguments && typeof rawArguments === 'object' && !Array.isArray(rawArguments) ? rawArguments as Record<string, unknown> : {}
+      return { kind: 'tool', call: { name, arguments: argumentsValue } }
+    }
+    if (type === 'final' || 'answer' in parsed || 'response' in parsed || 'content' in parsed) return { kind: 'final' }
+  } catch { /* Providers may return ordinary prose despite the agent protocol. */ }
+  return null
+}
+
+function sourceKey(hit: SearchHit): string { return `${hit.materialId}:${hit.chunkId}` }
+
+function isEvidenceInsufficient(answer: string): boolean {
+  const normalized = answer.replace(/\s+/gu, ' ').trim()
+  return /evidence\s+is\s+insufficient/i.test(normalized)
+    || /(?:当前|现有|提供的|本地)?材料.{0,36}(?:没有|未找到|找不到|不足|缺少).{0,30}(?:证据|信息|回答|支持)/u.test(normalized)
+    || /(?:证据|信息).{0,16}(?:不足|不够|缺少)/u.test(normalized)
+    || /(?:抱歉|对不起)?\s*(?:我)?(?:无法|不能|没法).{0,24}(?:回答|确定|提供|判断)/u.test(normalized)
+    || /(?:无法|不能|没法).{0,24}(?:回答|确定|提供|判断)/u.test(normalized)
+    || /(?:我)?(?:不确定|不清楚|不太清楚|无法确认)/u.test(normalized)
+}
+
+function isUsableKnowledgeAnswer(answer: string, question?: string): boolean {
+  const normalized = answer.replace(/\s+/gu, ' ').replace(/^根据(?:当前)?本地材料回答\s*[:：]?/u, '').replace(/\[[^:\]\s]+:[^\]\s]+\]/gu, '').trim()
+  const comparable = normalized.replace(/[？?。！!，,：:]/gu, '')
+  const questionComparable = (question ?? '').replace(/[？?。！!，,：:]/gu, '')
+  return normalized.length >= 2 && comparable !== questionComparable && !/^(?:好的|好的。|明白|收到)[。！!]?$/u.test(normalized)
+}
+
+function isInventoryQuestion(question: string): boolean {
+  return /(?:多少|几份|共有|总共|一共).{0,12}(?:材料|资料|文档)|(?:材料|资料|文档).{0,12}(?:多少|几份|有哪些|列表|清单)/u.test(question)
+}
+
+function isWorkspaceQuestionWithNoMaterials(question: string): boolean {
+  return isInventoryQuestion(question) || /(?:当前|这个|本地)?(?:工作区|知识库).{0,20}(?:材料|资料|文档|内容|有什么)|(?:材料|资料|文档).{0,20}(?:工作区|知识库|导入|本地)/u.test(question)
+}
+
+function isModelCapabilityQuestion(question: string): boolean {
+  return /(?:你是(?:什么|哪个)模型|什么模型|能做(?:什么|哪些)|你的能力|你是谁)/u.test(question)
+}
+
+function isLearningPathQuestion(question: string): boolean {
+  return /(?:从\s*(?:第?\s*)?0\s*章|从零|从头|第一步|入门|学习).{0,24}(?:开始|学|看|章节|章)|(?:学习|入门).{0,24}(?:哪(?:几|些)章|从)/u.test(question)
+}
+
+function citationFromHit(hit: SearchHit): GroundedAnswer['citations'][number] {
+  return { id: hit.materialId, materialId: hit.materialId, chunkId: hit.chunkId, title: hit.title, excerpt: hit.text.slice(0, 360), sourcePath: hit.sourcePath, pageNumber: hit.pageNumber, heading: hit.heading }
+}
+
+function localEvidenceText(text: string, limit = 180): string {
+  return text.replace(/```[\s\S]*?```/gu, '').replace(/^#{1,6}\s+/gmu, '').replace(/\s+/gu, ' ').trim().slice(0, limit)
 }
 
 function parseJsonObject(text: string): Record<string, unknown> {
-  const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim(); const start = cleaned.indexOf('{'); const end = cleaned.lastIndexOf('}')
+  let cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim()
+  // Some compatible gateways JSON-encode message.content once more. Decode
+  // that wrapper before looking for the structured response object.
+  for (let depth = 0; depth < 2 && cleaned.startsWith('"'); depth += 1) {
+    try {
+      const decoded = JSON.parse(cleaned)
+      if (typeof decoded !== 'string') break
+      cleaned = decoded.trim()
+    } catch { break }
+  }
+  const start = cleaned.indexOf('{'); const end = cleaned.lastIndexOf('}')
   if (start < 0 || end <= start) throw new Error('Model output did not contain a JSON object.')
-  return JSON.parse(cleaned.slice(start, end + 1)) as Record<string, unknown>
+  let parsed: unknown = JSON.parse(cleaned.slice(start, end + 1))
+  for (let depth = 0; depth < 2 && typeof parsed === 'string'; depth += 1) parsed = JSON.parse(parsed)
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Model output was not a JSON object.')
+  return parsed as Record<string, unknown>
 }
 
 export class AiService {
   private readonly topicRuns = new Map<string, Promise<AnalysisSummary>>()
   private readonly topicControllers = new Map<string, AbortController>()
-  constructor(private readonly workspace: WorkspaceService, private readonly appStore: AppStore) { const target = this.workspace as unknown as { setEmbeddingProvider?: (provider: (texts: string[]) => Promise<number[][] | null>) => void }; target.setEmbeddingProvider?.((texts) => this.embed(texts)) }
+  private readonly materialTools: MaterialMapMcpServer
+  constructor(private readonly workspace: WorkspaceService, private readonly appStore: AppStore) {
+    this.materialTools = new MaterialMapMcpServer(workspace)
+    const target = this.workspace as unknown as { setEmbeddingProvider?: (provider: (texts: string[]) => Promise<number[][] | null>) => void }
+    target.setEmbeddingProvider?.((texts) => this.embed(texts))
+  }
 
   async testConnection(settings: ModelSettings): Promise<{ ok: boolean; message: string }> {
     try {
@@ -155,6 +275,67 @@ export class AiService {
     }
   }
 
+  private localKnowledgeFallback(question: string, settings: ModelSettings, materials: Material[], catalog: SearchHit[], hits: SearchHit[], retrievalMode: GroundedAnswer['retrievalMode'], toolCalls: AgentToolCall[] = [], toolResults: unknown[] = []): GroundedAnswer | null {
+    const usedTools = toolCalls.map((call) => ({ name: call.name, arguments: call.arguments }))
+    const answerScope: KnowledgeAnswerScope = toolCalls.some((call) => call.name === 'propose_topic_changes') ? 'action' : 'workspace'
+    let proposalIndex = -1
+    for (let index = toolCalls.length - 1; index >= 0; index -= 1) { if (toolCalls[index].name === 'propose_topic_changes') { proposalIndex = index; break } }
+    const proposalResult = proposalIndex >= 0 && toolResults[proposalIndex] && typeof toolResults[proposalIndex] === 'object' ? toolResults[proposalIndex] as Record<string, unknown> : null
+    const proposalCount = proposalResult && Array.isArray(proposalResult.proposals) ? proposalResult.proposals.length : 0
+    if (proposalCount > 0) return { answer: `已生成 **${proposalCount}** 条待审核操作。请进入对应主题画板，在“待审核操作”中逐条应用或忽略；应用后仍可撤销。`, citations: [], confidence: 'grounded', retrievalMode: 'fallback', model: settings.chatModel, retrievedChunks: hits.length, citationMode: 'catalog', answerMode: 'local-fallback', answerScope: 'action', toolCalls: usedTools }
+    if (isModelCapabilityQuestion(question)) {
+      return { answer: `当前配置的模型是 **${settings.chatModel}**。我既可以回答通用问题，也可以调用 Material Map 工具检索材料、查关系和读取主题画板；涉及画板修改时只生成待审核提案。`, citations: [], confidence: 'grounded', retrievalMode, model: settings.chatModel, retrievedChunks: 0, citationMode: 'catalog', answerMode: 'local-fallback', answerScope: 'general', toolCalls: usedTools }
+    }
+    if (isInventoryQuestion(question)) {
+      const showTitles = /(?:有哪些|什么材料|列出|清单|列表)/u.test(question)
+      const titles = materials.slice(0, 12).map((material) => material.title).filter(Boolean)
+      const suffix = showTitles ? `\n前 ${titles.length} 份材料：${titles.join('、')}${materials.length > titles.length ? `（其余 ${materials.length - titles.length} 份未展开）` : ''}` : ''
+      return { answer: `当前工作区共有 **${materials.length}** 份材料。${suffix}`, citations: catalog.slice(0, 3).map(citationFromHit), confidence: 'grounded', retrievalMode, model: settings.chatModel, retrievedChunks: hits.length, citationMode: 'catalog', answerMode: 'local-fallback', answerScope, toolCalls: usedTools }
+    }
+    if (hits.length) {
+      const unique = [...new Map(hits.map((hit) => [hit.materialId, hit])).values()]
+        .sort((left, right) => {
+          if (!isLearningPathQuestion(question)) return 0
+          const leftNumber = Number(left.title.match(/^(\d{1,3})[-_、.]/u)?.[1] ?? 999)
+          const rightNumber = Number(right.title.match(/^(\d{1,3})[-_、.]/u)?.[1] ?? 999)
+          return leftNumber - rightNumber
+        })
+        .slice(0, 3)
+      if (isLearningPathQuestion(question)) {
+        if (unique.length) {
+          const path = unique.slice(0, 3).map((hit) => `- **${hit.title}**${hit.heading ? ` · ${hit.heading}` : ''}：${localEvidenceText(hit.text, 140)}`).join('\n')
+          return { answer: `建议按章节顺序学习：\n${path}`, citations: unique.map(citationFromHit), confidence: 'grounded', retrievalMode, model: settings.chatModel, retrievedChunks: hits.length, citationMode: 'inferred', answerMode: 'local-fallback', answerScope, toolCalls: usedTools }
+        }
+      }
+      return { answer: `我在当前材料中找到这些相关内容：\n${unique.map((hit) => `- **${hit.title}**${hit.heading ? ` · ${hit.heading}` : ''}：${localEvidenceText(hit.text)}`).join('\n')}`, citations: unique.map(citationFromHit), confidence: 'grounded', retrievalMode, model: settings.chatModel, retrievedChunks: hits.length, citationMode: 'inferred', answerMode: 'local-fallback', answerScope, toolCalls: usedTools }
+    }
+    if (/(?:概括|总结|整体|内容)/u.test(question) && materials.length) {
+      const titles = materials.slice(0, 8).map((material) => material.title).filter(Boolean)
+      return { answer: `当前工作区共有 ${materials.length} 份材料，主要包括：${titles.join('、')}${materials.length > titles.length ? '等。' : '。'} `, citations: catalog.slice(0, 3).map(citationFromHit), confidence: 'grounded', retrievalMode, model: settings.chatModel, retrievedChunks: hits.length, citationMode: 'catalog', answerMode: 'local-fallback', answerScope, toolCalls: usedTools }
+    }
+    return null
+  }
+
+  private async askWithMaterialTools(profile: ProviderProfile, settings: ModelSettings, prompt: string): Promise<{ text: string; toolCalls: AgentToolCall[]; toolResults: unknown[] }> {
+    const trace: Array<{ call: AgentToolCall; result: unknown }> = []
+    let nextPrompt = `${prompt}\n\nAgent tool protocol: You are the decision-maker for this user question. The local capabilities are separate MCP modules; choose the smallest relevant set from the question, and use zero tools for a purely general question that needs no workspace facts. Do not call every module in sequence. Use material tools for directory/search/read, relation tools for directed links and evidence, topic tools for the active canvas, and the canonical propose_topic_changes tool only when the user explicitly asks to change or organize the board. The legacy topic.propose_* tools are validation-only helpers; never present their result as an applied operation. On a tool turn return ONLY JSON {"type":"tool_call","name":"tool_name","arguments":{...}}. After the tool results are supplied, return ONLY JSON {"type":"final","scope":"workspace|general|action","answer":"...","sources":["materialId:chunkId"]} or concise plain text. Never invent an ID, never expose internal tool names or IDs in the visible answer, and do not claim a board change happened until a reviewable proposal was created.\n${JSON.stringify(this.materialTools.listTools())}`
+    let lastText = ''
+    for (let turn = 0; turn < 6; turn += 1) {
+      const response = await this.chat(profile, settings.chatModel, nextPrompt, false)
+      if (!response.ok) throw new Error(`Question request returned HTTP ${response.status}.`)
+      lastText = this.responseText(await this.responseJson(response, `Question${turn ? ' tool follow-up' : ''}`))
+      const instruction = parseAgentInstruction(lastText)
+      if (!instruction || instruction.kind === 'final') return { text: lastText, toolCalls: trace.map((item) => item.call), toolResults: trace.map((item) => item.result) }
+      let result: unknown
+      try { result = await this.materialTools.call(instruction.call.name, instruction.call.arguments) }
+      catch (error) { result = { error: error instanceof Error ? error.message : 'Tool call failed.' } }
+      trace.push({ call: instruction.call, result })
+      const serializedTrace = trace.map((item, index) => `Tool call ${index + 1}: ${JSON.stringify(item.call)}\nTool result ${index + 1}: ${JSON.stringify(item.result).slice(0, 12_000)}`).join('\n\n')
+      nextPrompt = `${prompt}\n\nAgent tool protocol: Continue reasoning from the tool results below. Call another module only when the question still needs a missing fact; otherwise answer now. Return ONLY JSON {"type":"tool_call","name":"tool_name","arguments":{...}} for another necessary read, or {"type":"final","scope":"workspace|general|action","answer":"...","sources":["materialId:chunkId"]} when ready. Never invent facts or IDs, never expose internal tool names or IDs, and keep board changes as reviewable proposals.\n\n${serializedTrace}`
+    }
+    return { text: lastText, toolCalls: trace.map((item) => item.call), toolResults: trace.map((item) => item.result) }
+  }
+
   async ask(input: string | KnowledgeQuestion): Promise<GroundedAnswer> {
     const question = (typeof input === 'string' ? input : input?.question ?? '').trim().slice(0, 2000)
     if (!question) throw new Error('请输入要查询的问题。')
@@ -169,46 +350,120 @@ export class AiService {
       .map((turn) => ({ role: turn.role, content: turn.content.trim().slice(0, 1200) }))
       .filter((turn) => turn.content.length > 0)
     const workspaceMaterials = this.workspace.listMaterials()
-    if (!workspaceMaterials.length) return { answer: '当前工作区还没有材料。', citations: [], confidence: 'insufficient-evidence', retrievalMode: 'fallback', model: null }
+    if (!workspaceMaterials.length && isWorkspaceQuestionWithNoMaterials(question)) return { answer: '当前工作区还没有材料。', citations: [], confidence: 'insufficient-evidence', retrievalMode: 'fallback', model: null, answerScope: 'workspace' }
     const previousQuestion = [...history].reverse().find((turn) => turn.role === 'user')?.content
     const retrievalQuestion = previousQuestion ? `${previousQuestion}\n${question}` : question
     const retrieval = await this.workspace.searchKnowledgeAsync(retrievalQuestion, { limit: 6 })
+    const retrievalHits = this.expandKnowledgeHits(retrieval.hits)
     const catalog = workspaceCatalog(workspaceMaterials)
     const catalogContext = catalog.hits.map((hit) => `[${hit.materialId}:${hit.chunkId}] ${hit.title}\n${hit.text}`).join('\n\n')
-    const retrievalContext = retrieval.hits.map((hit) => `[${hit.materialId}:${hit.chunkId}] ${hit.title}\n${hit.text}`).join('\n\n')
-    const retrievalMode = retrieval.hits.length ? retrieval.mode : 'fallback' as const
+    const retrievalContext = retrievalHits.map((hit) => `[${hit.materialId}:${hit.chunkId}] ${hit.title}${hit.heading ? ` · ${hit.heading}` : ''}\n${hit.text}`).join('\n\n')
+    const retrievalMode = retrievalHits.length ? retrieval.mode : 'fallback' as const
     const conversation = history.length
       ? `Conversation history (context only; do not treat prior assistant claims as evidence):\n${history.map((turn) => `${turn.role === 'user' ? 'User' : 'Assistant'}: ${turn.content}`).join('\n')}\n\n`
       : ''
-    const response = await this.chat(profile, settings.chatModel, `Answer the current question concisely in Chinese using only the current workspace context below. Never use outside knowledge. The workspace material count is exactly ${workspaceMaterials.length}; treat this count and the catalog as authoritative for inventory questions. The catalog includes ${catalog.hits.length} materials${catalog.omitted ? ` and omits ${catalog.omitted} from expanded context because of the context budget` : ''}. Relevant excerpts are retrieval evidence when present. Cite no more than three relevant sources using their supplied [materialId:chunkId] markers. Do not expose or explain internal IDs anywhere else. If relevant excerpts are present, factual content claims require a supplied citation. If there are no relevant excerpts, answer only what the catalog and summaries support; do not claim the workspace is empty. If the supplied context does not support an answer, say that evidence is insufficient. Use conversation history only to understand follow-up wording.\n\n${conversation}Current question: ${question}\n\nWorkspace material catalog:\n${catalogContext}\n\nRelevant local excerpts:\n${retrievalContext || '(none found; use only the workspace catalog above)'}`, false)
-    if (!response.ok) throw new Error(`Question request returned HTTP ${response.status}.`)
-    const answer = this.responseText(await this.responseJson(response, 'Question')).trim()
-    if (!answer) return { answer: '模型没有返回可用回答。', citations: [], confidence: 'insufficient-evidence', retrievalMode, model: settings.chatModel }
-    const evidenceHits = [...retrieval.hits, ...catalog.hits]
+    const prompt = `You are the DeepSeek-powered assistant inside Material Map. Answer the current question in concise, natural Chinese. For questions about the workspace, its materials, relations, or topic canvas, use ONLY the supplied local context and Material Map tools, and return scope "workspace". For an unrelated general question, you may answer from the model's general knowledge and return scope "general"; do not attach workspace citations or pretend the answer came from local materials. For an explicitly requested Material Map operation, inspect the relevant topic first, create only reviewable proposals through the proposal tool, and return scope "action". The catalog is authoritative evidence for inventory, directory, overview, and learning-path questions: use it to answer material counts, names, chapter order, and short summaries even when the keyword retrieval section is empty. Never say evidence is insufficient for those questions when the catalog contains the requested fact. For other workspace facts, decide whether the supplied local excerpts support the answer. For a supported answer, explain the conclusion directly and use Markdown bullets or a short table when that makes the answer clearer. For a follow-up, resolve pronouns from the conversation history but verify every workspace claim against the supplied context.
+
+The configured model is ${settings.chatModel}. If the question asks what model you are or what you can do, answer from this runtime metadata. The workspace material count is exactly ${workspaceMaterials.length}; treat that count and the catalog as authoritative for inventory questions. The catalog includes ${catalog.hits.length} materials${catalog.omitted ? ` and omits ${catalog.omitted} summaries from expanded context because of the context budget` : ''}. Relevant local excerpts are the primary evidence for workspace content questions. Prefer JSON in this shape: {"type":"final","scope":"workspace|general|action","answer":"...","sources":["materialId:chunkId"]}. When returning workspace sources, use only the supplied markers, at most three, and never expose internal IDs in the visible answer. The application validates and attaches sources, so do not refuse a supported workspace answer merely because a source marker is inconvenient. If the local context does not support a workspace factual answer, say exactly that the current materials do not contain enough evidence. Do not say the workspace is empty unless the authoritative count is zero.
+
+${conversation}Current question: ${question}
+
+Workspace material catalog:
+${catalogContext || '(empty catalog)'}
+
+Relevant local excerpts:
+${retrievalContext || '(none found; answer only from the catalog and summaries above)'}`
+    let agentResult: { text: string; toolCalls: AgentToolCall[]; toolResults: unknown[] }
+    try { agentResult = await this.askWithMaterialTools(profile, settings, prompt) } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (/safeStorage|decrypt/i.test(message)) throw new Error('AI 密钥无法读取，请在“模型与隐私”中重新保存 API Key。')
+      throw error
+    }
+    let toolCalls = agentResult.toolCalls
+    let toolResults = agentResult.toolResults
+    let parsed = parseKnowledgeResponse(agentResult.text)
+    let answer = parsed.answer
+    // Some models are overly conservative when the context contains several
+    // adjacent chunks. Give them one focused retry before falling back to a
+    // deterministic answer from the same local evidence.
+    if ((!isUsableKnowledgeAnswer(answer, question) || isEvidenceInsufficient(answer)) && retrievalHits.length && parsed.scope !== 'general') {
+      const retryPrompt = `The previous answer was empty or too conservative. Answer the question directly from the local excerpts below. Do not say evidence is insufficient when the excerpts contain the requested fact. Use concise Chinese Markdown. Return plain text or {"answer":"...","sources":["materialId:chunkId"]}; never invent facts.\n\nQuestion: ${question}\n\nLocal excerpts:\n${retrievalHits.slice(0, 6).map((hit) => `[${hit.materialId}:${hit.chunkId}] ${hit.title}${hit.heading ? ` · ${hit.heading}` : ''}\n${hit.text}`).join('\n\n')}`
+      try {
+        const retry = await this.askWithMaterialTools(profile, settings, retryPrompt)
+        toolCalls = [...toolCalls, ...retry.toolCalls]
+        toolResults = [...toolResults, ...retry.toolResults]
+        const retryParsed = parseKnowledgeResponse(retry.text)
+        if (isUsableKnowledgeAnswer(retryParsed.answer, question) && !isEvidenceInsufficient(retryParsed.answer)) { parsed = retryParsed; answer = retryParsed.answer }
+      } catch { /* The local evidence fallback below remains available. */ }
+    }
+    if (!isUsableKnowledgeAnswer(answer, question) || isEvidenceInsufficient(answer)) {
+      const fallback = this.localKnowledgeFallback(question, settings, workspaceMaterials, catalog.hits, retrievalHits, retrievalMode, toolCalls, toolResults)
+      if (fallback) return fallback
+      return { answer: answer ? '当前材料不足以回答这个问题。' : '模型没有返回可用回答。', citations: [], confidence: 'insufficient-evidence', retrievalMode, model: settings.chatModel, retrievedChunks: retrievalHits.length, toolCalls }
+    }
+    const answerScope: KnowledgeAnswerScope = toolCalls.some((call) => call.name === 'propose_topic_changes') ? 'action' : parsed.scope ?? (isModelCapabilityQuestion(question) ? 'general' : 'workspace')
+    const evidenceHits = [...retrievalHits, ...catalog.hits]
     const valid = new Map(evidenceHits.map((hit) => [`${hit.materialId}:${hit.chunkId}`, { id: hit.materialId, materialId: hit.materialId, chunkId: hit.chunkId, title: hit.title, excerpt: hit.text.slice(0, 360), sourcePath: hit.sourcePath, pageNumber: hit.pageNumber, heading: hit.heading }]))
-    const retrievalMarkers = new Set(retrieval.hits.map((hit) => `${hit.materialId}:${hit.chunkId}`))
+    const retrievalMarkers = new Set(retrievalHits.map(sourceKey))
     const citationNumbers = new Map<string, number>()
     const usedCitations: GroundedAnswer['citations'] = []
     let hasRetrievalCitation = false
-    const normalizedAnswer = answer.replace(/\[([^:\]\s]+):([^\]\s]+)\]/g, (_marker, materialId: string, chunkId: string) => {
-      const marker = `${materialId}:${chunkId}`
+    let modelProvidedRetrievalCitation = false
+    const addCitation = (marker: string, retrievalCitation: boolean, modelCitation = false): void => {
       const citation = valid.get(marker)
-      if (!citation) return ''
-      const retrievalCitation = retrievalMarkers.has(marker)
+      if (!citation) return
       const existing = citationNumbers.get(citation.materialId)
       if (existing) {
-        if (retrievalCitation) { hasRetrievalCitation = true; usedCitations[existing - 1] = citation }
-        return `[${existing}]`
+        if (retrievalCitation) { hasRetrievalCitation = true; if (modelCitation) modelProvidedRetrievalCitation = true; usedCitations[existing - 1] = citation }
+        return
       }
-      if (usedCitations.length >= 3) return ''
+      if (usedCitations.length >= 3) return
       const number = usedCitations.length + 1
       citationNumbers.set(citation.materialId, number)
       usedCitations.push(citation)
-      if (retrievalCitation) hasRetrievalCitation = true
-      return `[${number}]`
+      if (retrievalCitation) { hasRetrievalCitation = true; if (modelCitation) modelProvidedRetrievalCitation = true }
+    }
+    if (answerScope !== 'general') for (const marker of parsed.markers) addCitation(marker, retrievalMarkers.has(marker), true)
+    const normalizedAnswer = answer.replace(/\[([^:\]\s]+):([^\]\s]+)\]/g, (_marker, materialId: string, chunkId: string) => {
+      const marker = `${materialId}:${chunkId}`
+      const before = usedCitations.length
+      addCitation(marker, retrievalMarkers.has(marker), true)
+      const citation = valid.get(marker)
+      if (!citation) return ''
+      return `[${citationNumbers.get(citation.materialId) ?? (before + 1)}]`
     }).replace(/\]\s*\[/g, '] [').replace(/[ \t]+([，。；：！？])/g, '$1').trim()
-    if ((!hasRetrievalCitation && retrieval.hits.length > 0) || /evidence\s+is\s+insufficient|证据不足/i.test(answer)) return { answer: '当前材料不足以回答这个问题。', citations: [], confidence: 'insufficient-evidence', retrievalMode, model: settings.chatModel }
-    return { answer: normalizedAnswer, citations: usedCitations, confidence: 'grounded', retrievalMode, model: settings.chatModel }
+    // Source attribution is a product responsibility, not a formatting test
+    // for the model. If a provider returns a useful plain-text answer without
+    // markers, attach the strongest retrieved chunks and show them in the UI.
+    if (answerScope !== 'general' && !hasRetrievalCitation && retrievalHits.length > 0) {
+      const answerTerms = new Set(tokenize(normalizedAnswer))
+      const inferred = retrievalHits.map((hit, index) => ({ hit, score: tokenize(`${hit.title} ${hit.heading ?? ''} ${hit.text}`).reduce((score, term) => score + (answerTerms.has(term) ? 1 : 0), 0) + (1 / (index + 1)) })).sort((left, right) => right.score - left.score)
+      for (const { hit } of inferred.slice(0, 3)) addCitation(sourceKey(hit), true)
+    }
+    const insufficient = isEvidenceInsufficient(normalizedAnswer)
+    if (insufficient) return { answer: '当前材料不足以回答这个问题。', citations: [], confidence: 'insufficient-evidence', retrievalMode, model: settings.chatModel, retrievedChunks: retrievalHits.length, answerScope, toolCalls }
+    return { answer: normalizedAnswer, citations: answerScope === 'general' ? [] : usedCitations, confidence: 'grounded', retrievalMode: answerScope === 'general' ? 'fallback' : retrievalMode, model: settings.chatModel, retrievedChunks: answerScope === 'general' ? 0 : retrievalHits.length, citationMode: answerScope === 'general' ? 'catalog' : modelProvidedRetrievalCitation ? 'model' : usedCitations.length ? 'inferred' : 'catalog', answerMode: 'model', answerScope, toolCalls }
+  }
+
+  private expandKnowledgeHits(hits: SearchHit[]): SearchHit[] {
+    if (!hits.length) return []
+    const listChunks = (this.workspace as unknown as { listMaterialChunks?: (materialId: string) => Array<{ id: string; materialId: string; text: string; heading: string | null; pageNumber: number | null }> }).listMaterialChunks
+    if (!listChunks) return hits.slice(0, 8)
+    const expanded: SearchHit[] = []
+    const seen = new Set<string>()
+    for (const hit of hits.slice(0, 6)) {
+      const chunks = listChunks.call(this.workspace, hit.materialId)
+      const ordinal = chunks.findIndex((chunk) => chunk.id === hit.chunkId)
+      const neighbors = ordinal < 0 ? [] : chunks.slice(Math.max(0, ordinal - 1), ordinal + 2)
+      for (const chunk of neighbors) {
+        if (seen.has(chunk.id)) continue
+        seen.add(chunk.id)
+        expanded.push({ ...hit, chunkId: chunk.id, text: chunk.text, heading: chunk.heading, pageNumber: chunk.pageNumber, score: hit.score })
+        if (expanded.length >= 10) return expanded
+      }
+      if (!neighbors.length && hit.chunkId && !seen.has(hit.chunkId)) { seen.add(hit.chunkId); expanded.push(hit) }
+    }
+    return expanded.length ? expanded : hits.slice(0, 8)
   }
 
   // Explains exactly one discovered relation. The result is never persisted
@@ -460,7 +715,9 @@ export class AiService {
   private responseText(body: Record<string, unknown>): string {
     const direct = typeof body.output_text === 'string' ? body.output_text : undefined
     const output = (body.output as Array<{ content?: Array<{ text?: string }> }> | undefined)?.flatMap((item) => item.content ?? []).map((item) => item.text ?? '').join('')
-    const openAi = (body.choices as Array<{ message?: { content?: string } }> | undefined)?.[0]?.message?.content
+    const firstChoice = (body.choices as Array<{ message?: { content?: string | Array<{ text?: string }>; reasoning_content?: string }; text?: string; delta?: { content?: string } }> | undefined)?.[0]
+    const messageContent = firstChoice?.message?.content
+    const openAi = typeof messageContent === 'string' ? messageContent : Array.isArray(messageContent) ? messageContent.map((item) => item.text ?? '').join('') : firstChoice?.text ?? firstChoice?.delta?.content ?? firstChoice?.message?.reasoning_content
     const anthropic = (body.content as Array<{ text?: string }> | undefined)?.map((item) => item.text ?? '').join('')
     const gemini = (body.candidates as Array<{ content?: { parts?: Array<{ text?: string }> } }> | undefined)?.[0]?.content?.parts?.map((part) => part.text ?? '').join('')
     return String(direct ?? output ?? body.response ?? openAi ?? anthropic ?? gemini ?? '')

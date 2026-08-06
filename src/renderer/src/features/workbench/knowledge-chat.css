@@ -163,7 +163,20 @@
   color: var(--color-primary-hover);
 }
 .knowledge-chat-assistant-message { min-width: 0; max-width: calc(100% - 38px); color: var(--color-text); font-size: 13px; line-height: 1.7; }
-.knowledge-chat-answer { margin: 1px 0 7px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.knowledge-chat-answer { margin: 1px 0 7px; overflow-wrap: anywhere; }
+.knowledge-chat-answer > :first-child { margin-top: 0; }
+.knowledge-chat-answer > :last-child { margin-bottom: 0; }
+.knowledge-chat-answer p { margin: 0 0 8px; white-space: pre-wrap; }
+.knowledge-chat-answer ul, .knowledge-chat-answer ol { margin: 5px 0 9px; padding-left: 22px; }
+.knowledge-chat-answer li { margin: 3px 0; }
+.knowledge-chat-answer h1, .knowledge-chat-answer h2, .knowledge-chat-answer h3 { margin: 10px 0 5px; color: var(--color-text); font-size: 13px; }
+.knowledge-chat-answer blockquote { margin: 8px 0; padding-left: 10px; border-left: 2px solid #b7d1ce; color: var(--color-text-secondary); }
+.knowledge-chat-answer code { padding: 1px 4px; border-radius: 3px; background: var(--color-surface-sunken); font-size: 11px; }
+.knowledge-chat-answer pre { margin: 8px 0; padding: 10px; overflow-x: auto; border: 1px solid var(--color-border); border-radius: 5px; background: #f7faf9; }
+.knowledge-chat-answer pre code { padding: 0; background: transparent; }
+.knowledge-chat-answer table { width: 100%; margin: 8px 0; border-collapse: collapse; font-size: 11px; }
+.knowledge-chat-answer th, .knowledge-chat-answer td { padding: 5px 7px; border: 1px solid var(--color-border); text-align: left; vertical-align: top; }
+.knowledge-chat-answer th { background: var(--color-surface-sunken); font-weight: 600; }
 .knowledge-chat-answer-meta { display: flex; flex-wrap: wrap; gap: 7px; color: var(--color-text-tertiary); font-size: 10px; }
 .knowledge-chat-row.error .knowledge-chat-avatar { border-color: var(--color-danger-border); background: var(--color-danger-soft); color: var(--color-danger); }
 .knowledge-chat-row.error p { margin: 2px 0; color: #9a3d2b; }

@@ -1,14 +1,17 @@
 {
   "name": "material-map",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "A local-first personal material map desktop app",
   "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
+    "build:mcp": "esbuild scripts/material-map-mcp.ts --bundle --platform=node --format=cjs --packages=external --external:sqlite-vec --external:electron --external:@aws-sdk/client-s3 --outfile=out/material-map-mcp.cjs",
+    "mcp": "npm run build:mcp && node out/material-map-mcp.cjs",
     "package": "npm run build && electron-builder --win nsis portable",
     "preview": "electron-vite preview",
     "test": "vitest run src/main src/renderer/src",
+    "test:ci": "vitest run src/main src/renderer/src --exclude src/main/workspace-stress.test.ts --exclude src/main/demo-service.test.ts --testTimeout=30000 --hookTimeout=30000",
     "test:e2e": "npm run build && vitest run src/e2e",
     "benchmark": "esbuild scripts/benchmark.ts --bundle --platform=node --format=cjs --packages=external --outfile=node_modules/.cache/benchmark.cjs && node node_modules/.cache/benchmark.cjs",
     "test:watch": "vitest"

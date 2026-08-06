@@ -6,12 +6,17 @@ import { resetLearningPathDemo } from './demo-service'
 import { WorkspaceService } from './workspace-service'
 
 const roots: string[] = []
+const services: WorkspaceService[] = []
 const root = (): string => { const value = mkdtempSync(join(tmpdir(), 'material-map-demo-')); roots.push(value); return value }
-afterEach(() => roots.splice(0).forEach((value) => rmSync(value, { recursive: true, force: true })))
+const makeService = (): WorkspaceService => { const service = new WorkspaceService(); services.push(service); return service }
+afterEach(() => {
+  for (const service of services.splice(0)) service.close()
+  roots.splice(0).forEach((value) => rmSync(value, { recursive: true, force: true }))
+})
 
 describe('resetLearningPathDemo', () => {
   it('rebuilds one complete seven-step board with editable 3→4 connection', async () => {
-    const workspace = new WorkspaceService(); await workspace.create(root(), 'Demo')
+    const workspace = makeService(); await workspace.create(root(), 'Demo')
     const first = await resetLearningPathDemo(workspace)
     // A stale relation from an earlier demo version must not block reset.
     const staleSource = workspace.topicMap(first.id).materials[2]; const staleTarget = workspace.topicMap(first.id).materials[3]

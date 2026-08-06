@@ -14,10 +14,10 @@ export function useTopicConnections(topicId: string, relations: Relation[], onRe
   const create = useCallback(async (connection: Connection): Promise<void> => {
     const error = validate(connection); if (error) { onNotice(error); return }
     try {
-      if (executeCommand) await executeCommand({ kind: 'createRelation', payload: { relation: { sourceMaterialId: connection.source!, targetMaterialId: connection.target!, label: '', relationType: 'related', evidenceMaterialId: connection.source!, confidence: null, style: { sourceHandle: connection.sourceHandle ?? null, targetHandle: connection.targetHandle ?? null, sourceArrowStyle: 'none', targetArrowStyle: 'triangle', lineDash: 'solid', animated: false } } } })
+      if (executeCommand) await executeCommand({ kind: 'createRelation', payload: { relation: { sourceMaterialId: connection.source!, targetMaterialId: connection.target!, label: '', relationType: 'related', evidenceMaterialId: connection.source!, confidence: null, style: { sourceHandle: connection.sourceHandle ?? null, targetHandle: connection.targetHandle ?? null, sourceArrowStyle: 'none', targetArrowStyle: 'triangle', lineKind: 'orthogonal', lineDash: 'solid', animated: false } } } })
       else {
         const relation = await ipc.relation.create({ sourceMaterialId: connection.source!, targetMaterialId: connection.target!, label: '', relationType: 'related', evidenceText: null, evidenceMaterialId: connection.source!, confidence: null, createdBy: 'manual' }) as Relation
-        await ipc.topic.relationStyle(topicId, relation.id, { sourceHandle: connection.sourceHandle ?? null, targetHandle: connection.targetHandle ?? null, sourceArrowStyle: 'none', targetArrowStyle: 'triangle', lineDash: 'solid', animated: false })
+        await ipc.topic.relationStyle(topicId, relation.id, { sourceHandle: connection.sourceHandle ?? null, targetHandle: connection.targetHandle ?? null, sourceArrowStyle: 'none', targetArrowStyle: 'triangle', lineKind: 'orthogonal', lineDash: 'solid', animated: false })
         await onRefresh()
       }
       onNotice('已创建正式连接。')

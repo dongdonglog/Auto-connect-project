@@ -1,10 +1,11 @@
 /* 主题画板布局：工具条 + 画布 + 关系属性面板 */
 .whiteboard {
   display: grid;
-  grid-template-columns: 56px minmax(0, 1fr) 260px;
+  grid-template-columns: 56px minmax(0, 1fr);
   gap: 12px;
   align-items: start;
 }
+.whiteboard.with-inspector { grid-template-columns: 56px minmax(0, 1fr) 280px; }
 
 .whiteboard-inspector {
   position: sticky;
@@ -47,13 +48,41 @@
 .whiteboard-inspector input[type="color"] { padding: 2px; height: 34px; }
 .whiteboard-inspector .danger-button { width: 100%; margin-top: 4px; }
 .whiteboard-inspector .secondary-button { width: 100%; margin-top: 2px; }
+.whiteboard-tools .proposal-tool { position: relative; }
+.whiteboard-tools .proposal-tool > span {
+  position: absolute;
+  top: 2px;
+  right: 1px;
+  min-width: 15px;
+  height: 15px;
+  display: grid;
+  place-items: center;
+  padding: 0 3px;
+  border: 2px solid #fff;
+  border-radius: 8px;
+  background: var(--color-primary);
+  color: #fff;
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 1;
+}
+.proposal-inspector { gap: 12px; }
+.proposal-empty { padding: 18px 4px; text-align: center; }
+.proposal-list { display: grid; gap: 8px; }
+.proposal-list article { display: grid; gap: 6px; padding: 10px; border: 1px solid var(--color-border); border-radius: 7px; background: #fafcfc; }
+.proposal-list article > span { color: var(--color-primary-hover); font-size: 10px; font-weight: 650; }
+.proposal-list article > strong { color: #2d465d; font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+.proposal-list article > p { margin: 0; color: #60748d; font-size: 11px; line-height: 1.5; word-break: normal; }
+.proposal-list article > small { color: var(--color-text-tertiary); font-size: 10px; line-height: 1.45; }
+.proposal-list article > div { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.proposal-list article button { width: 100%; margin: 0; }
 .inspector-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .whiteboard-inspector .inspector-toggle { flex-direction: row; align-items: center; gap: 7px; color: #40536b; }
 .whiteboard-inspector .inspector-toggle input { width: 15px; height: 15px; margin: 0; padding: 0; }
 
 /* 窄屏时属性面板移到画布下方，保持可读宽度 */
 @media (max-width: 1200px) {
-  .whiteboard { grid-template-columns: 56px minmax(0, 1fr); }
+  .whiteboard.with-inspector { grid-template-columns: 56px minmax(0, 1fr); }
   .whiteboard-inspector { position: static; grid-column: 2; width: 100%; box-sizing: border-box; }
 }
 

@@ -1,7 +1,7 @@
 import { EdgeLabelRenderer, getBezierPath, getStraightPath, type EdgeProps } from '@xyflow/react'
 import { useEffect, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import type { Relation } from '../../types'
-import { buildTopicEdgeRoute, type Point, type Rect } from '../../lib/topic-edge-routing'
+import { buildTopicEdgeRoute, type Point, type PortPosition, type Rect } from '../../lib/topic-edge-routing'
 
 const arrowPath: Record<string, string> = { triangle: 'M1 1 L11 6 L1 11z', 'open-triangle': 'M1 1 L11 6 L1 11', diamond: 'M1 6 L6 1 L11 6 L6 11z' }
 type ParallelInfo = { index: number; count: number }
@@ -29,17 +29,19 @@ function strokeDash(relation: Relation): string | undefined {
   return relation.createdBy === 'ai' || relation.createdBy === 'local' ? '7 5' : undefined
 }
 
-export function RelationEdge({ id, sourceX, sourceY, targetX, targetY, data: rawData, selected }: EdgeProps): React.ReactElement {
+export function RelationEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, data: rawData, selected }: EdgeProps): React.ReactElement {
   const data = rawData as EdgeData
   const relation = data.relation
   const [draftWaypoints, setDraftWaypoints] = useState<Point[] | null>(null)
   const waypoints = draftWaypoints ?? relation.routePoints
   useEffect(() => { setDraftWaypoints(null) }, [relation.id, JSON.stringify(relation.routePoints ?? [])])
-  const kind = relation.lineKind ?? 'auto'
+  // `auto` is a legacy value. It remains readable for old workspaces but is
+  // rendered as the supported orthogonal path and is no longer offered in UI.
+  const kind = relation.lineKind === 'straight' || relation.lineKind === 'bezier' ? relation.lineKind : 'orthogonal'
   const source = { x: sourceX, y: sourceY }; const target = { x: targetX, y: targetY }
   const label = relation.label.trim()
   const labelSize = { width: Math.min(240, Math.max(72, label.length * 15 + 38)), height: 22 }
-  const route = buildTopicEdgeRoute({ source, target, obstacles: data.obstacles, labelObstacles: data.labelObstacles, waypoints, spread: parallelSpread(data.parallel), labelSize, labelAnchor: relation.labelAnchor })
+  const route = buildTopicEdgeRoute({ source, target, obstacles: data.obstacles, labelObstacles: data.labelObstacles, waypoints, spread: parallelSpread(data.parallel), labelSize, labelAnchor: relation.labelAnchor, sourcePosition: sourcePosition as PortPosition, targetPosition: targetPosition as PortPosition })
   let path = route.path; let labelPoint = route.label
   if (!waypoints?.length && kind === 'straight') {
     ;[path, labelPoint.x, labelPoint.y] = getStraightPath({ sourceX, sourceY, targetX, targetY })
@@ -96,7 +98,7 @@ export function RelationEdge({ id, sourceX, sourceY, targetX, targetY, data: raw
     data.select(id)
   }
   return <>
-    <defs>{Object.entries(arrowPath).map(([name, d]) => <marker key={name} id={`${marker}-${name}`} viewBox="0 0 12 12" refX="10" refY="6" markerWidth="9" markerHeight="9" orient="auto-start-reverse" markerUnits="strokeWidth"><path d={d} fill={name === 'open-triangle' ? 'none' : color} stroke={color} strokeWidth="1.5" /></marker>)}</defs>
+    <defs>{Object.entries(arrowPath).map(([name, d]) => <marker key={name} id={`${marker}-${name}`} viewBox="0 0 12 12" refX="10" refY="6" markerWidth="12" markerHeight="12" orient="auto-start-reverse" markerUnits="userSpaceOnUse"><path d={d} fill={name === 'open-triangle' ? 'none' : color} stroke={color} strokeWidth="1.4" strokeLinejoin="round" /></marker>)}</defs>
     <path d={path} fill="none" stroke="transparent" strokeWidth={28} className="relation-hit-area" onClick={select} onDoubleClick={addWaypoint} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); data.context(id, event.clientX, event.clientY) }} />
     <path d={path} fill="none" stroke={color} strokeWidth={selected ? Math.max(4, relation.lineWidth ?? 2.75) : relation.lineWidth ?? 2.75} strokeDasharray={strokeDash(relation)} markerStart={markerFor(relation.sourceArrowStyle ?? (relation.sourceArrow ? 'triangle' : 'none'))} markerEnd={markerFor(relation.targetArrowStyle ?? 'triangle')} className={`relation-path ${relation.createdBy !== 'local' && relation.animated !== false && strokeDash(relation) ? 'flowing-relation' : ''}`} onClick={select} />
     {(label || selected) && <EdgeLabelRenderer>

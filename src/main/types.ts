@@ -93,6 +93,16 @@ export interface GroundedAnswer {
   confidence: 'grounded' | 'insufficient-evidence'
   retrievalMode: 'fts' | 'hybrid' | 'fallback'
   model: string | null
+  /** Number of local chunks placed in the model context for this turn. */
+  retrievedChunks?: number
+  /** Whether source markers came from the model or were attached by the app. */
+  citationMode?: 'model' | 'inferred' | 'catalog'
+  /** Lets the UI distinguish a model response from a local evidence fallback. */
+  answerMode?: 'model' | 'local-fallback'
+  /** Local Material Map tools used by the agent before producing this answer. */
+  toolCalls?: Array<{ name: string; arguments: Record<string, unknown> }>
+  /** Distinguishes workspace evidence, model general knowledge, and reviewable actions. */
+  answerScope?: 'workspace' | 'general' | 'action'
 }
 export interface KnowledgeChatTurn {
   role: 'user' | 'assistant'

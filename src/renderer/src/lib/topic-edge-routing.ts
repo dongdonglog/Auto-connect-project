@@ -1,6 +1,7 @@
 export type Point = { x: number; y: number }
 export type Rect = { x: number; y: number; width: number; height: number }
 export type Segment = { start: Point; end: Point }
+export type PortPosition = 'left' | 'top' | 'right' | 'bottom'
 
 export type EdgeRoute = {
   points: Point[]
@@ -35,16 +36,36 @@ function routeScore(points: Point[], obstacles: Rect[]): number {
   return collisions * 1_000_000 + routeSegments.reduce((sum, segment) => sum + distance(segment.start, segment.end), 0) + Math.max(0, routeSegments.length - 1) * 22
 }
 
-function orthogonalCandidates(source: Point, target: Point, obstacles: Rect[], spread: number): Point[][] {
-  const horizontal = Math.abs(target.x - source.x) >= Math.abs(target.y - source.y)
-  const midpoint = horizontal ? (source.y + target.y) / 2 + spread : (source.x + target.x) / 2 + spread
+const portAxis = (position: PortPosition): 'horizontal' | 'vertical' => position === 'left' || position === 'right' ? 'horizontal' : 'vertical'
+const portVector = (position: PortPosition): Point => position === 'left' ? { x: -1, y: 0 } : position === 'right' ? { x: 1, y: 0 } : position === 'top' ? { x: 0, y: -1 } : { x: 0, y: 1 }
+const portStub = (point: Point, position: PortPosition, distance = 20): Point => { const vector = portVector(position); return { x: point.x + vector.x * distance, y: point.y + vector.y * distance } }
+
+function orthogonalCandidates(source: Point, target: Point, obstacles: Rect[], spread: number, sourcePosition: PortPosition, targetPosition: PortPosition): Point[][] {
+  const sourceStub = portStub(source, sourcePosition); const targetStub = portStub(target, targetPosition)
   const top = Math.min(source.y, target.y, ...obstacles.map((rect) => rect.y)) - 42 - Math.abs(spread)
   const bottom = Math.max(source.y, target.y, ...obstacles.map((rect) => rect.y + rect.height)) + 42 + Math.abs(spread)
   const left = Math.min(source.x, target.x, ...obstacles.map((rect) => rect.x)) - 42 - Math.abs(spread)
   const right = Math.max(source.x, target.x, ...obstacles.map((rect) => rect.x + rect.width)) + 42 + Math.abs(spread)
-  return horizontal
-    ? [[source, { x: target.x, y: source.y }, target], [source, { x: source.x + 34, y: midpoint }, { x: target.x - 34, y: midpoint }, target], [source, { x: source.x + 34, y: top }, { x: target.x - 34, y: top }, target], [source, { x: source.x + 34, y: bottom }, { x: target.x - 34, y: bottom }, target]]
-    : [[source, { x: source.x, y: target.y }, target], [source, { x: midpoint, y: source.y + 34 }, { x: midpoint, y: target.y - 34 }, target], [source, { x: left, y: source.y + 34 }, { x: left, y: target.y - 34 }, target], [source, { x: right, y: source.y + 34 }, { x: right, y: target.y - 34 }, target]]
+  const candidates: Point[][] = []
+  const add = (points: Point[]): void => { candidates.push(compact(points)) }
+  if (portAxis(sourcePosition) === 'horizontal' && portAxis(targetPosition) === 'horizontal') {
+    const channels = [...new Set([sourceStub.y + spread, targetStub.y + spread, (sourceStub.y + targetStub.y) / 2 + spread, top, bottom])]
+    channels.forEach((channel) => add([source, sourceStub, { x: sourceStub.x, y: channel }, { x: targetStub.x, y: channel }, targetStub, target]))
+  } else if (portAxis(sourcePosition) === 'vertical' && portAxis(targetPosition) === 'vertical') {
+    const channels = [...new Set([sourceStub.x + spread, targetStub.x + spread, (sourceStub.x + targetStub.x) / 2 + spread, left, right])]
+    channels.forEach((channel) => add([source, sourceStub, { x: channel, y: sourceStub.y }, { x: channel, y: targetStub.y }, targetStub, target]))
+  } else if (portAxis(sourcePosition) === 'horizontal') {
+    add([source, sourceStub, { x: targetStub.x, y: sourceStub.y }, targetStub, target])
+    add([source, sourceStub, { x: sourceStub.x, y: targetStub.y }, targetStub, target])
+    add([source, sourceStub, { x: sourceStub.x, y: top }, { x: targetStub.x, y: top }, targetStub, target])
+    add([source, sourceStub, { x: sourceStub.x, y: bottom }, { x: targetStub.x, y: bottom }, targetStub, target])
+  } else {
+    add([source, sourceStub, { x: sourceStub.x, y: targetStub.y }, targetStub, target])
+    add([source, sourceStub, { x: targetStub.x, y: sourceStub.y }, targetStub, target])
+    add([source, sourceStub, { x: left, y: sourceStub.y }, { x: left, y: targetStub.y }, targetStub, target])
+    add([source, sourceStub, { x: right, y: sourceStub.y }, { x: right, y: targetStub.y }, targetStub, target])
+  }
+  return candidates
 }
 
 function compact(points: Point[]): Point[] {
@@ -83,9 +104,12 @@ function labelPosition(points: Point[], obstacles: Rect[], labelSize: { width: n
   return { point: fallback, rect: rectAt(fallback, labelSize.width, labelSize.height) }
 }
 
-export function buildTopicEdgeRoute(input: { source: Point; target: Point; obstacles: Rect[]; labelObstacles?: Rect[]; waypoints?: Point[]; spread?: number; labelSize?: { width: number; height: number }; labelAnchor?: number }): EdgeRoute {
+export function buildTopicEdgeRoute(input: { source: Point; target: Point; obstacles: Rect[]; labelObstacles?: Rect[]; waypoints?: Point[]; spread?: number; labelSize?: { width: number; height: number }; labelAnchor?: number; sourcePosition?: PortPosition; targetPosition?: PortPosition }): EdgeRoute {
   const source = input.source; const target = input.target
-  const points = input.waypoints?.length ? compact([source, ...input.waypoints, target]) : compact(orthogonalCandidates(source, target, input.obstacles, input.spread ?? 0).sort((left, right) => routeScore(left, input.obstacles) - routeScore(right, input.obstacles))[0] ?? [source, target])
+  const horizontal = Math.abs(target.x - source.x) >= Math.abs(target.y - source.y)
+  const sourcePosition = input.sourcePosition ?? (horizontal ? (target.x >= source.x ? 'right' : 'left') : (target.y >= source.y ? 'bottom' : 'top'))
+  const targetPosition = input.targetPosition ?? (horizontal ? (target.x >= source.x ? 'left' : 'right') : (target.y >= source.y ? 'top' : 'bottom'))
+  const points = input.waypoints?.length ? compact([source, ...input.waypoints, target]) : orthogonalCandidates(source, target, input.obstacles, input.spread ?? 0, sourcePosition, targetPosition).sort((left, right) => routeScore(left, input.obstacles) - routeScore(right, input.obstacles))[0] ?? [source, target]
   const label = labelPosition(points, input.labelObstacles ?? input.obstacles, input.labelSize ?? { width: 86, height: 22 }, input.labelAnchor ?? .5)
   return { points, path: points.map((point, index) => `${index ? 'L' : 'M'}${point.x} ${point.y}`).join(' '), label: label.point, labelRect: label.rect }
 }

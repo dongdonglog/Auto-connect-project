@@ -2,19 +2,19 @@
 
 原则：Agent 只能在可检索、可解释、可审阅的本地知识层之上工作。0.1 不让 Agent 自动修改文件、实体或正式关系。
 
-## Stage 0：工具化知识访问（0.1）
+## Stage 0：工具化知识访问（0.1，已实现）
 
-能力：本地 FTS/hybrid 检索、材料读取、关系与证据查询、带引用问答、单条关系解释。
+能力：本地 FTS/hybrid 检索、材料读取、关系与证据查询、带引用问答、单条关系解释。模型根据用户问题选择材料、关系或主题模块，不要求用户手工调用工具。
 
-接口形态：现有 IPC；未来抽取为只读 MCP tools：`search_materials`、`read_material_chunk`、`list_material_relations`、`get_relation_evidence`。
+接口形态：应用内 IPC + stdio MCP。已提供材料目录、搜索、读取、关系、证据和主题上下文工具。
 
 安全：只读、返回紧凑 metadata 后按需展开，所有答案附 citation。
 
-## Stage 1：受限提案 Agent（0.2）
+## Stage 1：受限提案 Agent（0.2，基础闭环已实现）
 
 能力：对当前主题提出创建关系、重命名、分组、布局或阅读路径建议。
 
-实现：复用 `topic_proposals`。Agent 只能写 proposal，用户逐条接受或归档；每项必须包含理由、证据和受影响材料 ID。
+实现：复用 `topic_proposals`。Agent 只能写 proposal，用户在主题画板逐条应用或忽略；每项必须包含理由、证据和受影响材料 ID。已覆盖创建/重命名关系、顺序、卡片样式、布局与分组提案，应用后进入持久化撤销/重做历史。
 
 安全：禁止文件写入、禁止删除、禁止绕过 `allowCloud`、禁止覆盖 `manual` 关系。
 

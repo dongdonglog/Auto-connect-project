@@ -3,7 +3,7 @@ export interface Material { id:string; type:MaterialType; title:string; mimeType
 export interface FolderSource { id:string; rootPath:string; enabled:boolean; includePatterns:string[]; excludePatterns:string[]; watchEnabled:boolean; createdAt:string; updatedAt:string }
 export interface SearchHit { materialId:string; chunkId:string|null; title:string; text:string; score:number; sourcePath:string|null; pageNumber:number|null; heading:string|null; availability:'available'|'unavailable' }
 export interface GroundedCitation { id:string; materialId:string; chunkId:string|null; title:string; excerpt:string; sourcePath:string|null; pageNumber:number|null; heading:string|null }
-export interface GroundedAnswer { answer:string; citations:GroundedCitation[]; confidence:'grounded'|'insufficient-evidence'; retrievalMode:'fts'|'hybrid'|'fallback'; model:string|null }
+export interface GroundedAnswer { answer:string; citations:GroundedCitation[]; confidence:'grounded'|'insufficient-evidence'; retrievalMode:'fts'|'hybrid'|'fallback'; model:string|null; retrievedChunks?:number; citationMode?:'model'|'inferred'|'catalog'; answerMode?:'model'|'local-fallback'; toolCalls?:Array<{name:string;arguments:Record<string,unknown>}>; answerScope?:'workspace'|'general'|'action' }
 export interface KnowledgeChatTurn { role:'user'|'assistant'; content:string }
 export interface KnowledgeQuestion { question:string; history?:KnowledgeChatTurn[] }
 export interface MaterialTag { materialId:string; tag:string; source:'title'|'heading'|'phrase'; weight:number }

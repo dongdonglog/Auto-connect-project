@@ -1,5 +1,8 @@
 import { AlertCircle, Archive, BookOpen, Bot, Check, ChevronDown, Clock3, Plus, Send, Settings, Trash2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import ReactMarkdown from 'react-markdown'
+import rehypeSanitize from 'rehype-sanitize'
+import remarkGfm from 'remark-gfm'
 import type { GroundedAnswer, GroundedCitation, KnowledgeChatTurn } from '../../types'
 import './knowledge-chat.css'
 
@@ -120,8 +123,8 @@ export function KnowledgeChat({ messages, aiStatus, sessions, activeSessionId, o
         {!messages.length && !loading && aiStatus === 'ready' && (
           <div className="knowledge-chat-empty">
             <span className="knowledge-chat-empty-icon"><Bot size={23}/></span>
-            <h2>询问你的材料</h2>
-            <p>回答只使用当前工作区中的内容。</p>
+            <h2>询问或整理 Material Map</h2>
+            <p>可以查询材料、回答通用问题，或提出待审核的画板操作。</p>
           </div>
         )}
         {messages.map((message) => {
@@ -131,9 +134,12 @@ export function KnowledgeChat({ messages, aiStatus, sessions, activeSessionId, o
             <div className="knowledge-chat-row assistant" key={message.id}>
               <span className="knowledge-chat-avatar"><Bot size={16}/></span>
               <div className="knowledge-chat-assistant-message">
-                <p className="knowledge-chat-answer">{message.answer.answer}</p>
+                <div className="knowledge-chat-answer"><ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>{message.answer.answer}</ReactMarkdown></div>
                 <div className="knowledge-chat-answer-meta">
-                  <span>{message.answer.confidence === 'grounded' ? '基于材料回答' : '证据不足'}</span>
+                  <span>{message.answer.confidence !== 'grounded' ? '材料证据不足' : message.answer.answerScope === 'general' ? '模型通用回答' : message.answer.answerScope === 'action' ? '待审核操作' : '基于本地材料'}</span>
+                  {message.answer.answerScope !== 'general' && message.answer.retrievedChunks !== undefined && <span>{message.answer.retrievalMode === 'hybrid' ? '混合检索' : message.answer.retrievalMode === 'fts' ? '关键词检索' : '目录回退'} · {message.answer.retrievedChunks} 段</span>}
+                  {message.answer.toolCalls && message.answer.toolCalls.length > 0 && <span title="AI 已根据当前问题自动查阅本地能力">AI 已查阅 · {message.answer.toolCalls.length}</span>}
+                  {message.answer.answerMode === 'local-fallback' && <span>模型未给出完整回答 · 已根据本地证据整理</span>}
                   <span aria-label="AI 模型">{message.answer.model ? `模型 · ${message.answer.model}` : message.answer.model === null ? '未调用 AI' : '模型信息未记录'}</span>
                 </div>
                 {message.answer.citations.length > 0 && (
@@ -171,7 +177,7 @@ export function KnowledgeChat({ messages, aiStatus, sessions, activeSessionId, o
                 void submit()
               }
             }}
-            placeholder={aiStatus === 'ready' ? '询问当前工作区中的材料' : '请先配置 AI 后再提问'}
+            placeholder={aiStatus === 'ready' ? '提问，或让 AI 查询材料和整理画板' : '请先配置 AI 后再提问'}
             aria-label="询问材料"
           />
           <button type="button" className="knowledge-chat-send" title="发送" aria-label="发送" disabled={!question.trim() || loading || aiStatus !== 'ready'} onClick={() => void submit()}><Send size={17}/></button>

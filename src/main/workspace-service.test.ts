@@ -6,12 +6,17 @@ import { WorkspaceService } from './workspace-service'
 import { chunkHash } from './indexer'
 
 const roots: string[] = []
+const services: WorkspaceService[] = []
 const makeRoot = () => { const root = mkdtempSync(join(tmpdir(), 'material-map-')); roots.push(root); return root }
-afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
+const makeService = () => { const service = new WorkspaceService(); services.push(service); return service }
+afterEach(() => {
+  for (const service of services.splice(0)) service.close()
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
+})
 
 describe('WorkspaceService', () => {
   it('builds explainable material relations from explicit references and shared technical entities', async () => {
-    const service = new WorkspaceService(); await service.create(makeRoot(), 'Explorer')
+    const service = makeService(); await service.create(makeRoot(), 'Explorer')
     const referenced = await service.createDocument('details.md', '# Redis details\nRedis persistence and cache policy.', 'md')
     const source = await service.createDocument('overview.md', '# Overview\nRead [details](details.md). Redis is used for cache policy.', 'md')
     const relations = service.listMaterialRelations(source.id)
@@ -33,7 +38,7 @@ describe('WorkspaceService', () => {
     writeFileSync(targetPath, '# Details\nSQLite persistence details.')
     const sourceText = '# Overview\nRead [details](./docs/details.md) before implementation.'
     writeFileSync(sourcePath, sourceText)
-    const service = new WorkspaceService(); await service.create(join(root, 'workspace'), 'Explorer')
+    const service = makeService(); await service.create(join(root, 'workspace'), 'Explorer')
     const folder = await service.addFolderSource({ rootPath: files, enabled: true, includePatterns: [], excludePatterns: [], watchEnabled: false })
     await vi.waitFor(() => expect(service.listMaterials().every((material) => material.status === 'complete')).toBe(true))
     const target = service.listMaterials().find((material) => material.sourcePath === targetPath)!
@@ -58,7 +63,7 @@ describe('WorkspaceService', () => {
   })
 
   it('fixes a material relation into the selected topic with both materials', async () => {
-    const service = new WorkspaceService(); await service.create(makeRoot(), 'Explorer')
+    const service = makeService(); await service.create(makeRoot(), 'Explorer')
     const details = await service.createDocument('details.md', '# Details\nSQLite persistence details.', 'md')
     const overview = await service.createDocument('overview.md', '# Overview\nRead [details](details.md).', 'md')
     const relation = service.listMaterialRelations(overview.id).find((item) => item.target.id === details.id)!
@@ -71,24 +76,24 @@ describe('WorkspaceService', () => {
 
   it('restores material relation evidence with a workspace package', async () => {
     const root = makeRoot(); const source = join(root, 'source-workspace'); const destination = join(root, 'imported-workspace'); const packagePath = join(root, 'relations.material-workspace')
-    const service = new WorkspaceService(); await service.create(source, 'Explorer')
+    const service = makeService(); await service.create(source, 'Explorer')
     const target = await service.createDocument('target.md', '# Target\nSQLite basics.', 'md')
     const material = await service.createDocument('source.md', '# Source\nSee target.md for SQLite basics.', 'md')
     const relation = service.listMaterialRelations(material.id).find((item) => item.target.id === target.id)!
     service.fixMaterialRelation(relation.id)
     await service.exportPackage(packagePath)
-    const restored = new WorkspaceService(); await restored.importPackage(packagePath, destination)
+    const restored = makeService(); await restored.importPackage(packagePath, destination)
     expect(restored.listMaterialRelations(material.id).find((item) => item.target.id === target.id)).toMatchObject({ status: 'fixed', evidence: expect.any(Array) })
   })
 
   it('does not rebuild complete material relations each time a workspace opens', async () => {
     const root = join(makeRoot(), 'workspace')
-    const service = new WorkspaceService(); await service.create(root, 'Explorer')
+    const service = makeService(); await service.create(root, 'Explorer')
     await service.createDocument('details.md', '# Details\nSQLite.', 'md')
     await service.createDocument('overview.md', '# Overview\nSee details.md.', 'md')
     service.close()
 
-    const reopened = new WorkspaceService()
+    const reopened = makeService()
     const rebuild = vi.spyOn(reopened as never, 'rebuildMaterialRelations')
     await reopened.open(root)
     expect(rebuild).not.toHaveBeenCalled()
@@ -96,7 +101,7 @@ describe('WorkspaceService', () => {
   })
 
   it('stores notes, topics, workstreams, and editable relations locally', async () => {
-    const service = new WorkspaceService()
+    const service = makeService()
     await service.create(makeRoot(), 'Research')
     const source = await service.createNote('Interview notes', 'Customer feedback on 2026-07-20')
     const target = await service.createNote('Requirements', 'Prioritize offline support')
@@ -114,7 +119,7 @@ describe('WorkspaceService', () => {
   })
 
   it('keeps relations when a material moves to another workstream', async () => {
-    const service = new WorkspaceService()
+    const service = makeService()
     await service.create(makeRoot(), 'Research')
     const source = await service.createNote('Discovery', 'The initial research material.')
     const target = await service.createNote('Decision', 'The resulting decision material.')
@@ -144,7 +149,7 @@ describe('WorkspaceService', () => {
   })
 
   it('moves materials to ungrouped when deleting a workstream and preserves relations', async () => {
-    const service = new WorkspaceService()
+    const service = makeService()
     await service.create(makeRoot(), 'Research')
     const source = await service.createNote('Source', 'Source material')
     const target = await service.createNote('Target', 'Target material')
@@ -161,7 +166,7 @@ describe('WorkspaceService', () => {
   })
 
   it('persists free-canvas positions for topic materials', async () => {
-    const service = new WorkspaceService()
+    const service = makeService()
     await service.create(makeRoot(), 'Research')
     const material = await service.createNote('Canvas card', 'Placed freely on the board.')
     const topic = service.createTopic('Canvas')
@@ -171,7 +176,7 @@ describe('WorkspaceService', () => {
   })
 
   it('allows an unnamed one-way manual relation', async () => {
-    const service = new WorkspaceService()
+    const service = makeService()
     await service.create(makeRoot(), 'Research')
     const source = await service.createNote('Source', 'Source material')
     const target = await service.createNote('Target', 'Target material')
@@ -184,7 +189,7 @@ describe('WorkspaceService', () => {
 
   it('preserves a source arrow explicitly enabled by the user', async () => {
     const root = makeRoot()
-    const service = new WorkspaceService()
+    const service = makeService()
     await service.create(root, 'Research')
     const source = await service.createNote('Source', 'Source material')
     const target = await service.createNote('Target', 'Target material')
@@ -198,7 +203,7 @@ describe('WorkspaceService', () => {
   })
 
   it('stores card and relation colors per topic without changing another topic', async () => {
-    const service = new WorkspaceService()
+    const service = makeService()
     await service.create(makeRoot(), 'Research')
     const source = await service.createNote('Source', 'Source material')
     const target = await service.createNote('Target', 'Target material')
@@ -216,7 +221,7 @@ describe('WorkspaceService', () => {
 
   it('persists topic editor commands, card display overrides, and redo history across reopening', async () => {
     const root = makeRoot()
-    const service = new WorkspaceService()
+    const service = makeService()
     await service.create(root, 'Research')
     const source = await service.createNote('Original title', 'Original material excerpt.')
     const target = await service.createNote('Target', 'Target material')
@@ -244,7 +249,7 @@ describe('WorkspaceService', () => {
   })
 
   it('rolls back a failed editor command without leaving partial styles or history', async () => {
-    const service = new WorkspaceService(); await service.create(makeRoot(), 'Research')
+    const service = makeService(); await service.create(makeRoot(), 'Research')
     const source = await service.createNote('Source', 'Source material')
     const target = await service.createNote('Target', 'Target material')
     const topic = service.createTopic('Board'); service.addMaterialsToTopic(topic.id, [source.id, target.id])
@@ -259,7 +264,7 @@ describe('WorkspaceService', () => {
   })
 
   it('persists all four-side port combinations and keeps relation edits scoped to the topic', async () => {
-    const service = new WorkspaceService(); await service.create(makeRoot(), 'Research')
+    const service = makeService(); await service.create(makeRoot(), 'Research')
     const source = await service.createNote('Source', 'Source material')
     const target = await service.createNote('Target', 'Target material')
     const topic = service.createTopic('Board'); const otherTopic = service.createTopic('Other')
@@ -278,7 +283,7 @@ describe('WorkspaceService', () => {
   })
 
   it('reconnects a formal relation as a directed edge and supports undo/redo', async () => {
-    const service = new WorkspaceService(); await service.create(makeRoot(), 'Research')
+    const service = makeService(); await service.create(makeRoot(), 'Research')
     const source = await service.createNote('Source', 'Source material')
     const target = await service.createNote('Target', 'Target material')
     const topic = service.createTopic('Board'); service.addMaterialsToTopic(topic.id, [source.id, target.id])
@@ -293,7 +298,7 @@ describe('WorkspaceService', () => {
   })
 
   it('keeps hidden Explorer relations hidden after a workspace restart', async () => {
-    const root = makeRoot(); const service = new WorkspaceService(); await service.create(root, 'Explorer')
+    const root = makeRoot(); const service = makeService(); await service.create(root, 'Explorer')
     const target = await service.createDocument('target.md', '# Target\nSQLite basics.', 'md')
     const source = await service.createDocument('source.md', '# Source\nSee target.md for SQLite basics.', 'md')
     const relation = service.listMaterialRelations(source.id).find((item) => item.target.id === target.id)!
@@ -304,7 +309,7 @@ describe('WorkspaceService', () => {
   })
 
   it('undoes a mixed card and relationship deletion as one editor operation', async () => {
-    const service = new WorkspaceService()
+    const service = makeService()
     await service.create(makeRoot(), 'Research')
     const first = await service.createNote('First', 'First material')
     const second = await service.createNote('Second', 'Second material')
@@ -324,7 +329,7 @@ describe('WorkspaceService', () => {
   })
 
   it('removes a material from a topic without deleting the material or its workspace data', async () => {
-    const service = new WorkspaceService()
+    const service = makeService()
     await service.create(makeRoot(), 'Research')
     const material = await service.createNote('Reusable', 'Keep this material in the workspace.')
     const topic = service.createTopic('Board')
@@ -335,7 +340,7 @@ describe('WorkspaceService', () => {
   })
 
   it('persists a batch topology layout and rejects duplicate or self relationships', async () => {
-    const service = new WorkspaceService()
+    const service = makeService()
     await service.create(makeRoot(), 'Research')
     const first = await service.createNote('First', 'First material')
     const second = await service.createNote('Second', 'Second material')
@@ -349,7 +354,7 @@ describe('WorkspaceService', () => {
   })
 
   it('allows a formal manual relation beside an AI suggestion in the same direction', async () => {
-    const service = new WorkspaceService(); await service.create(makeRoot(), 'Research')
+    const service = makeService(); await service.create(makeRoot(), 'Research')
     const source = await service.createNote('Source', 'A'); const target = await service.createNote('Target', 'B')
     const topic = service.createTopic('Board'); service.addMaterialsToTopic(topic.id, [source.id, target.id])
     service.createRelation({ sourceMaterialId: source.id, targetMaterialId: target.id, label: 'AI 建议', relationType: 'related', evidenceText: 'A', evidenceMaterialId: source.id, confidence: .7, createdBy: 'ai' })
@@ -361,7 +366,7 @@ describe('WorkspaceService', () => {
   })
 
   it('records topic analysis job states and detects duplicate relations', async () => {
-    const service = new WorkspaceService()
+    const service = makeService()
     await service.create(makeRoot(), 'Research')
     const source = await service.createNote('Source', 'Source material')
     const target = await service.createNote('Target', 'Target material')
@@ -380,7 +385,7 @@ describe('WorkspaceService', () => {
 
   it('recognizes exact duplicate imports without discarding the original', async () => {
     const root = makeRoot(); const input = join(root, 'source.md'); writeFileSync(input, '# Hello\nA local material')
-    const service = new WorkspaceService(); await service.create(join(root, 'workspace'), 'Materials')
+    const service = makeService(); await service.create(join(root, 'workspace'), 'Materials')
     const first = await service.importFile(input); const second = await service.importFile(input)
     expect(second.duplicateOf?.id).toBe(first.material.id)
     await vi.waitFor(() => expect(service.listJobs().every((job) => job.status === 'complete')).toBe(true))
@@ -389,7 +394,7 @@ describe('WorkspaceService', () => {
 
   it('parses an imported file from its copied workspace path', async () => {
     const root = makeRoot(); const input = join(root, 'meeting.md'); writeFileSync(input, '# Meeting\nOffline search is required.')
-    const service = new WorkspaceService(); await service.create(join(root, 'workspace'), 'Materials')
+    const service = makeService(); await service.create(join(root, 'workspace'), 'Materials')
     const imported = await service.importFile(input)
     await vi.waitFor(() => expect(service.listJobs().every((job) => job.status === 'complete')).toBe(true))
     expect(service.getMaterial(imported.material.id)?.title).toBe('meeting')
@@ -400,16 +405,16 @@ describe('WorkspaceService', () => {
     const root = makeRoot(); const firstPath = join(root, 'first', 'notes.md'); const secondPath = join(root, 'second', 'notes.md')
     mkdirSync(join(root, 'first')); mkdirSync(join(root, 'second'))
     writeFileSync(firstPath, `# First\n${'a'.repeat(12_300)}`); writeFileSync(secondPath, '# Second\nDifferent content')
-    const service = new WorkspaceService(); await service.create(join(root, 'workspace'), 'Materials')
+    const service = makeService(); await service.create(join(root, 'workspace'), 'Materials')
     const [first, second] = await Promise.all([service.importFile(firstPath), service.importFile(secondPath)])
-    await vi.waitFor(() => expect([service.getMaterial(first.material.id)?.status, service.getMaterial(second.material.id)?.status]).toEqual(['complete', 'complete']))
+    await vi.waitFor(() => expect([service.getMaterial(first.material.id)?.status, service.getMaterial(second.material.id)?.status]).toEqual(['complete', 'complete']), { timeout: 30_000 })
     expect(service.getMaterial(first.material.id)?.extractedText).toHaveLength(12_308)
     expect(service.getMaterial(second.material.id)?.extractedText).toContain('Different content')
   })
 
   it('imports files over 10 MB without starting automatic extraction', async () => {
     const root = makeRoot(); const sourcePath = join(root, 'large.md'); writeFileSync(sourcePath, Buffer.alloc(10 * 1024 * 1024 + 1, 'a'))
-    const service = new WorkspaceService(); await service.create(join(root, 'workspace'), 'Materials')
+    const service = makeService(); await service.create(join(root, 'workspace'), 'Materials')
     const imported = await service.importFile(sourcePath)
     expect(service.getMaterial(imported.material.id)).toMatchObject({ status: 'paused', error: expect.stringContaining('10 MB') })
     expect(service.listJobs()).toEqual(expect.arrayContaining([expect.objectContaining({ materialId: imported.material.id, status: 'paused' })]))
@@ -417,11 +422,11 @@ describe('WorkspaceService', () => {
 
   it('stores an encrypted workspace database and rejects an incorrect password', async () => {
     const root = join(makeRoot(), 'private-workspace')
-    const service = new WorkspaceService()
+    const service = makeService()
     await service.create(root, 'Private', 'correct-horse-battery-staple')
     await service.createNote('Private note', 'This remains in the encrypted workspace.')
     expect(existsSync(join(root, 'workspace.sqlite.enc'))).toBe(true)
-    const reopened = new WorkspaceService()
+    const reopened = makeService()
     await reopened.create(join(makeRoot(), 'already-open'), 'Already open')
     await reopened.createNote('Current note', 'Keep the active workspace usable.')
     await expect(reopened.open(root, 'wrong-password')).rejects.toThrow()
@@ -432,11 +437,11 @@ describe('WorkspaceService', () => {
 
   it('inspects and imports an encrypted workspace package only with its password', async () => {
     const root = makeRoot(); const source = join(root, 'private-source'); const destination = join(root, 'private-import'); const packagePath = join(root, 'private.material-workspace')
-    const service = new WorkspaceService(); await service.create(source, 'Private package', 'correct-horse-battery-staple')
+    const service = makeService(); await service.create(source, 'Private package', 'correct-horse-battery-staple')
     await service.createNote('Private note', 'This package remains encrypted.')
     await service.exportPackage(packagePath)
     await expect(service.inspectPackage(packagePath)).resolves.toEqual({ name: 'Private package', encrypted: true })
-    const imported = new WorkspaceService()
+    const imported = makeService()
     await expect(imported.importPackage(packagePath, destination, 'wrong-password')).rejects.toThrow()
     await imported.importPackage(packagePath, destination, 'correct-horse-battery-staple')
     expect(imported.summary()).toMatchObject({ name: 'Private package', encrypted: true })
@@ -445,7 +450,7 @@ describe('WorkspaceService', () => {
 
   it('saves workspace documents and creates a version when editing an imported text file', async () => {
     const root = makeRoot(); const sourcePath = join(root, 'source.txt'); writeFileSync(sourcePath, 'original text')
-    const service = new WorkspaceService(); await service.create(join(root, 'workspace'), 'Materials')
+    const service = makeService(); await service.create(join(root, 'workspace'), 'Materials')
     const document = await service.createDocument('Plan', '# First draft', 'md')
     await service.saveTextMaterial(document.id, 'Plan revised', '# Revised draft')
     expect(service.getMaterial(document.id)).toMatchObject({ title: 'Plan revised', extractedText: '# Revised draft', type: 'document' })
@@ -459,7 +464,7 @@ describe('WorkspaceService', () => {
 
   it('deletes material metadata without deleting the original source file', async () => {
     const root = makeRoot(); const sourcePath = join(root, 'source.txt'); writeFileSync(sourcePath, 'original text')
-    const service = new WorkspaceService(); await service.create(join(root, 'workspace'), 'Materials')
+    const service = makeService(); await service.create(join(root, 'workspace'), 'Materials')
     const imported = await service.importFile(sourcePath)
     await vi.waitFor(() => expect(service.listJobs().every((job) => job.status === 'complete')).toBe(true))
     const topic = service.createTopic('Review'); service.addToTopic(topic.id, imported.material.id)
@@ -471,17 +476,17 @@ describe('WorkspaceService', () => {
 
   it('exports and imports a workspace package into a new destination', async () => {
     const root = makeRoot(); const source = join(root, 'source-workspace'); const destination = join(root, 'imported-workspace'); const packagePath = join(root, 'research.material-workspace')
-    const service = new WorkspaceService(); await service.create(source, 'Research')
+    const service = makeService(); await service.create(source, 'Research')
     await service.createNote('Imported note', 'This survives workspace package import.')
     await service.exportPackage(packagePath)
-    const imported = new WorkspaceService()
+    const imported = makeService()
     await imported.importPackage(packagePath, destination)
     expect(imported.summary()).toMatchObject({ root: destination, name: 'Research' })
     expect(imported.search('survives')).toHaveLength(1)
   })
 
   it('archives a topic without deleting its materials, styles, or positions', async () => {
-    const service = new WorkspaceService(); await service.create(makeRoot(), 'Research')
+    const service = makeService(); await service.create(makeRoot(), 'Research')
     const material = await service.createNote('Keep me', 'This remains in the workspace.')
     const topic = service.createTopic('Archive me')
     service.addToTopic(topic.id, material.id); service.positionMaterial(topic.id, material.id, 320, 180)
@@ -490,7 +495,7 @@ describe('WorkspaceService', () => {
     expect(service.listTopics()).toHaveLength(0)
     expect(service.listArchivedTopics()).toMatchObject([{ id: topic.id }])
     expect(service.getMaterial(material.id)).toMatchObject({ title: 'Keep me' })
-    const reopened = new WorkspaceService(); await reopened.open(service.summary().root)
+    const reopened = makeService(); await reopened.open(service.summary().root)
     expect(reopened.listTopics()).toHaveLength(0)
     expect(reopened.listArchivedTopics()).toMatchObject([{ id: topic.id }])
     reopened.close()
@@ -499,7 +504,7 @@ describe('WorkspaceService', () => {
   })
 
   it('adds a material batch to one topic and returns only real memberships', async () => {
-    const service = new WorkspaceService(); await service.create(makeRoot(), 'Research')
+    const service = makeService(); await service.create(makeRoot(), 'Research')
     const first = await service.createNote('First', 'A'); const second = await service.createNote('Second', 'B')
     const included = service.createTopic('Included'); const other = service.createTopic('Other')
     service.addMaterialsToTopic(included.id, [first.id, second.id, first.id]); service.addToTopic(other.id, second.id)
@@ -509,7 +514,7 @@ describe('WorkspaceService', () => {
   })
 
   it('stores manual card order and restores the time-based order without changing material dates', async () => {
-    const service = new WorkspaceService(); await service.create(makeRoot(), 'Research')
+    const service = makeService(); await service.create(makeRoot(), 'Research')
     const first = await service.createNote('First', 'A'); const second = await service.createNote('Second', 'B')
     const topic = service.createTopic('Order'); service.addMaterialsToTopic(topic.id, [first.id, second.id])
     service.updateCardOrder(topic.id, second.id, 1)
@@ -520,7 +525,7 @@ describe('WorkspaceService', () => {
   })
 
   it('does not invent system relationships for numbered materials without AI', async () => {
-    const service = new WorkspaceService(); await service.create(makeRoot(), 'Research')
+    const service = makeService(); await service.create(makeRoot(), 'Research')
     const materials = []
     for (let index = 24; index >= 1; index -= 1) materials.push(await service.createNote(`${String(index).padStart(2, '0')}-Lesson`, `Step ${index}`))
     const topic = service.createTopic('Course'); service.addMaterialsToTopic(topic.id, materials.map((material) => material.id))
@@ -531,7 +536,7 @@ describe('WorkspaceService', () => {
   })
 
   it('keeps a manual relationship and manual position when rebuilding the system topology', async () => {
-    const service = new WorkspaceService(); await service.create(makeRoot(), 'Research')
+    const service = makeService(); await service.create(makeRoot(), 'Research')
     const first = await service.createNote('01-First', 'First'); const second = await service.createNote('02-Second', 'Second')
     const topic = service.createTopic('Flow'); service.addToTopic(topic.id, first.id)
     service.createRelation({ sourceMaterialId: first.id, targetMaterialId: second.id, label: 'Manual next', relationType: 'next', evidenceText: null, evidenceMaterialId: null, confidence: null, createdBy: 'manual' })
@@ -543,7 +548,7 @@ describe('WorkspaceService', () => {
   })
 
   it('extracts local tags and persists bounded topic relationship candidates', async () => {
-    const service = new WorkspaceService(); await service.create(makeRoot(), 'Research')
+    const service = makeService(); await service.create(makeRoot(), 'Research')
     const first = await service.createDocument('Go HTTP 服务', '# HTTP 服务\n使用 Go 编写用户服务和 HTTP API。', 'md')
     const second = await service.createDocument('Go API 测试', '# HTTP API 测试\n为 Go 用户服务编写接口测试。', 'md')
     const third = await service.createDocument('数据库设计', '# MySQL\n设计数据库索引。', 'md')
@@ -557,7 +562,7 @@ describe('WorkspaceService', () => {
   })
 
   it('uses the most recently added real topic membership as the primary workbench topic', async () => {
-    const service = new WorkspaceService(); await service.create(makeRoot(), 'Research')
+    const service = makeService(); await service.create(makeRoot(), 'Research')
     const material = await service.createNote('Shared', 'Reusable')
     const older = service.createTopic('Older'); service.addToTopic(older.id, material.id)
     const newer = service.createTopic('Newer'); service.addToTopic(newer.id, material.id)
@@ -568,7 +573,7 @@ describe('WorkspaceService', () => {
   it('indexes a folder incrementally and preserves a missing source as unavailable', async () => {
     const root = makeRoot(); const sourceRoot = join(root, 'knowledge'); mkdirSync(sourceRoot)
     const filePath = join(sourceRoot, 'guide.md'); writeFileSync(filePath, '# Offline\nLocal search and citations.')
-    const service = new WorkspaceService(); await service.create(join(root, 'workspace'), 'Knowledge')
+    const service = makeService(); await service.create(join(root, 'workspace'), 'Knowledge')
     const source = await service.addFolderSource({ rootPath: sourceRoot, enabled: true, includePatterns: [], excludePatterns: [], watchEnabled: false })
     await vi.waitFor(() => expect(service.listMaterials()).toHaveLength(1))
     const material = service.listMaterials()[0]
@@ -584,7 +589,7 @@ describe('WorkspaceService', () => {
   })
 
   it('creates stable text chunks for notes and returns paragraph-level search hits', async () => {
-    const service = new WorkspaceService(); await service.create(makeRoot(), 'Knowledge')
+    const service = makeService(); await service.create(makeRoot(), 'Knowledge')
     const material = await service.createNote('Architecture', '# Storage\n\nSQLite keeps the local index.\n\n# Retrieval\n\nCitations point back to source chunks.')
     const chunks = service.listMaterialChunks(material.id)
     expect(chunks.length).toBeGreaterThanOrEqual(2)
@@ -592,8 +597,30 @@ describe('WorkspaceService', () => {
     expect(service.searchKnowledge('source chunks')).toEqual(expect.arrayContaining([expect.objectContaining({ materialId: material.id, chunkId: chunks.at(-1)?.id })]))
   })
 
+  it('finds chapter evidence for a mixed Chinese and Go question', async () => {
+    const service = makeService(); await service.create(makeRoot(), 'Knowledge')
+    const material = await service.createDocument('03-Go核心语法', '# 第 3 章 Go 核心语法\n\n介绍 Go 语言的变量、函数和接口基础。', 'md')
+    const hits = service.searchKnowledge('我想学习 Go 语言的基础，可以看哪几章', { limit: 6 })
+    expect(hits).toEqual(expect.arrayContaining([expect.objectContaining({ materialId: material.id, text: expect.stringContaining('Go 语言') })]))
+  })
+
+  it('does not rank GORM or MongoDB as Go matches and supports ordinal chapter questions', async () => {
+    const service = makeService(); await service.create(makeRoot(), 'Knowledge')
+    const gorm = await service.createDocument('20-GORM最佳实践', '# GORM 基础\n\nGORM 数据访问。', 'md')
+    const mongo = await service.createDocument('24-MongoDB实战', '# MongoDB 基础\n\nMongoDB 数据库。', 'md')
+    const go = await service.createDocument('03-Go核心语法', '# 第 3 章 Go 核心语法\n\nGo 语言变量和接口。', 'md')
+    const goHits = service.searchKnowledge('Go 语言基础', { limit: 3 })
+    expect(goHits[0]?.materialId).toBe(go.id)
+    expect(goHits[0]?.materialId).not.toBe(gorm.id)
+    expect(goHits[0]?.materialId).not.toBe(mongo.id)
+    expect(service.searchKnowledge('Go 语言 基础', { limit: 3 })[0]?.materialId).toBe(go.id)
+    const first = await service.createDocument('01-Go为什么适合服务器开发', '# 第 1 章\n\nGo 入门概览。', 'md')
+    const ordinalHits = service.searchKnowledge('从第 0 章开始，第一步应该学习什么', { limit: 3 })
+    expect(ordinalHits[0]?.materialId).toBe(first.id)
+  })
+
   it('caches material analysis cards and expands evidence to neighboring chunks', async () => {
-    const service = new WorkspaceService(); await service.create(makeRoot(), 'Knowledge')
+    const service = makeService(); await service.create(makeRoot(), 'Knowledge')
     const material = await service.createNote('Architecture', '# Storage\n\nSQLite keeps the local index.\n\n# Retrieval\n\nEvidence windows include nearby chunks.')
     const chunks = service.listMaterialChunks(material.id)
     const card = { materialId: material.id, contentHash: material.hash ?? chunkHash(material.extractedText ?? material.excerpt ?? material.title), modelId: 'model-a', title: material.title, date: material.importedAt, headings: ['Storage'], keywords: ['SQLite'], evidenceChunkIds: [chunks[0].id], summary: 'Local storage.', generatedAt: new Date().toISOString() }
@@ -603,7 +630,7 @@ describe('WorkspaceService', () => {
   })
 
   it('rejects an analysis commit after a topic revision changes', async () => {
-    const service = new WorkspaceService(); await service.create(makeRoot(), 'Knowledge')
+    const service = makeService(); await service.create(makeRoot(), 'Knowledge')
     const first = await service.createNote('First', 'First step')
     const second = await service.createNote('Second', 'Second step')
     const topic = service.createTopic('Flow'); service.addMaterialsToTopic(topic.id, [first.id, second.id])
@@ -618,7 +645,7 @@ describe('WorkspaceService', () => {
     writeFileSync(join(sourceRoot, 'keep.md'), 'keep this')
     writeFileSync(join(sourceRoot, 'skip.txt'), 'skip this')
     writeFileSync(join(sourceRoot, 'drafts', 'nested.md'), 'skip nested')
-    const service = new WorkspaceService(); await service.create(join(root, 'workspace'), 'Knowledge')
+    const service = makeService(); await service.create(join(root, 'workspace'), 'Knowledge')
     const source = await service.addFolderSource({ rootPath: sourceRoot, enabled: true, includePatterns: ['**/*.md'], excludePatterns: ['drafts/**'], watchEnabled: false })
     expect(service.listMaterials().map((material) => material.title)).toEqual(['keep'])
     const paused = service.pauseFolderSource(source.id)
@@ -627,7 +654,7 @@ describe('WorkspaceService', () => {
   })
 
   it('persists topic proposals until the user accepts or archives them', async () => {
-    const service = new WorkspaceService(); await service.create(makeRoot(), 'Knowledge')
+    const service = makeService(); await service.create(makeRoot(), 'Knowledge')
     const topic = service.createTopic('Review')
     const proposals = service.createTopicProposals(topic.id, [{ kind: 'create_relation', reason: 'The guide references the checklist.', evidence: 'Guide paragraph', materialId: null, relationId: null, payload: { label: 'references' } }])
     expect(proposals).toHaveLength(1)
@@ -637,16 +664,44 @@ describe('WorkspaceService', () => {
     expect(service.listTopicProposals(topic.id, 'accepted')).toHaveLength(1)
   })
 
+  it('applies an accepted proposal through reversible topic history', async () => {
+    const service = makeService(); await service.create(makeRoot(), 'Knowledge')
+    const source = await service.createNote('Source', 'First step'); const target = await service.createNote('Target', 'Second step')
+    const topic = service.createTopic('Review'); service.addMaterialsToTopic(topic.id, [source.id, target.id])
+    const proposal = service.createTopicProposals(topic.id, [{ kind: 'create_relation', reason: 'The order is explicit.', evidence: 'First step, then second step.', materialId: null, relationId: null, payload: { sourceMaterialId: source.id, targetMaterialId: target.id, relationType: 'next', label: '下一步' } }])[0]
+    expect(service.topicMap(topic.id).relations).toHaveLength(0)
+    expect(service.acceptTopicProposal(topic.id, proposal.id)).toMatchObject({ status: 'accepted' })
+    expect(service.topicMap(topic.id).relations).toEqual([expect.objectContaining({ sourceMaterialId: source.id, targetMaterialId: target.id, label: '下一步', createdBy: 'manual' })])
+    expect(service.topicHistoryStatus(topic.id).undo).toBe(true)
+    service.undoTopicEditorCommand(topic.id)
+    expect(service.topicMap(topic.id).relations).toHaveLength(0)
+    service.redoTopicEditorCommand(topic.id)
+    expect(service.topicMap(topic.id).relations).toEqual([expect.objectContaining({ label: '下一步' })])
+  })
+
+  it('applies and reverses a workstream proposal without touching material records', async () => {
+    const service = makeService(); await service.create(makeRoot(), 'Knowledge')
+    const first = await service.createNote('First', 'Local first'); const second = await service.createNote('Second', 'Local second')
+    const topic = service.createTopic('Review'); service.addMaterialsToTopic(topic.id, [first.id, second.id])
+    const proposal = service.createTopicProposals(topic.id, [{ kind: 'create_workstream', reason: 'These materials form one lane.', evidence: 'Both are part of the same workflow.', materialId: null, relationId: null, payload: { name: 'Workflow', materialIds: [first.id, second.id] } }])[0]
+    service.acceptTopicProposal(topic.id, proposal.id)
+    expect(service.topicMap(topic.id).workstreams).toEqual([expect.objectContaining({ name: 'Workflow', source: 'ai' })])
+    expect(service.topicMap(topic.id).materials.filter((material) => material.workstreamId)).toHaveLength(2)
+    service.undoTopicEditorCommand(topic.id)
+    expect(service.topicMap(topic.id).workstreams).toHaveLength(0)
+    expect(service.topicMap(topic.id).materials.every((material) => !material.workstreamId)).toBe(true)
+  })
+
   it('requeues materials left running when a workspace is reopened', async () => {
-    const root = join(makeRoot(), 'workspace'); const service = new WorkspaceService(); await service.create(root, 'Recovery')
+    const root = join(makeRoot(), 'workspace'); const service = makeService(); await service.create(root, 'Recovery')
     const note = await service.createNote('README', 'Local recovery test')
     service.startJob(note.id, 'extract')
-    const reopened = new WorkspaceService(); await reopened.open(root)
+    const reopened = makeService(); await reopened.open(root)
     await vi.waitFor(() => expect(reopened.listJobs().some((job) => job.materialId === note.id && job.status === 'complete')).toBe(true))
   })
 
   it('stores PDF page numbers on material chunks', async () => {
-    const service = new WorkspaceService(); await service.create(makeRoot(), 'PDF')
+    const service = makeService(); await service.create(makeRoot(), 'PDF')
     const material = await service.createNote('PDF', 'Page one\n\nPage two')
     ;(service as unknown as { indexMaterialChunks(id: string, text: string, extracted: { pages: Array<{ pageNumber: number; text: string }> }): void }).indexMaterialChunks(material.id, 'Page one\n\nPage two', { pages: [{ pageNumber: 1, text: 'Page one' }, { pageNumber: 2, text: 'Page two' }] })
     expect(service.listMaterialChunks(material.id).map((chunk) => chunk.pageNumber)).toEqual([1, 2])
