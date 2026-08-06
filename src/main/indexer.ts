@@ -40,3 +40,20 @@ export function chunkHash(text: string): string { return createHash('sha256').up
 export function tokenize(value: string): string[] {
   return value.toLocaleLowerCase().split(/[^\p{L}\p{N}_-]+/u).map((token) => token.trim()).filter((token) => token.length > 1)
 }
+
+/**
+ * Search terms keep the original word-like tokens for FTS, then add small
+ * CJK/Latin fragments used by the LIKE fallback. SQLite's default unicode61
+ * tokenizer does not reliably split mixed strings such as "Go核心语法" or a
+ * natural Chinese question into independently searchable words.
+ */
+export function searchTerms(value: string): string[] {
+  const terms = new Set(tokenize(value))
+  for (const token of [...terms]) {
+    for (const latin of token.match(/[a-z0-9][a-z0-9_+#.-]*/gi) ?? []) if (latin.length > 1) terms.add(latin.toLocaleLowerCase())
+    for (const han of token.match(/[\u3400-\u9fff]+/gu) ?? []) {
+      for (let index = 0; index < han.length - 1; index += 1) terms.add(han.slice(index, index + 2))
+    }
+  }
+  return [...terms].filter((term) => term.length > 1)
+}

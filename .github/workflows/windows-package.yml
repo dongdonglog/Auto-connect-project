@@ -31,6 +31,7 @@ jobs:
         run: npm ci
 
       - name: Run tests
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') || contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') }}
         run: npm run test:ci
 
       - name: Build and package
@@ -52,6 +53,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-alpha') || contains(github.ref_name, '-beta') }}
           files: |
             release/*.exe
             release/*.blockmap

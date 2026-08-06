@@ -26,6 +26,32 @@ describe('AiService protocol requests', () => {
     expect(fetchMock).toHaveBeenCalledOnce()
   })
 
+  it('accepts structured sources without requiring markers in the visible answer', async () => {
+    const hit = { materialId: 'm1', chunkId: 'c1', title: '部署说明', text: '发布前需要执行回滚演练。', score: 1, sourcePath: '/deploy.md', pageNumber: null, heading: '发布检查', availability: 'available' }
+    const workspace = {
+      searchKnowledgeAsync: vi.fn().mockResolvedValue({ hits: [hit], mode: 'fts' }),
+      listMaterials: vi.fn().mockReturnValue([{ id: 'm1', title: '部署说明', type: 'document', status: 'complete', excerpt: hit.text, extractedText: null, sourcePath: '/deploy.md', availability: 'available' }]),
+      getSettings: vi.fn().mockReturnValue(settings('profile'))
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ answer: '发布前先执行回滚演练。', sources: ['m1:c1'] }) } }] }), { headers: { 'content-type': 'application/json' } })))
+    const result = await new AiService(workspace as unknown as WorkspaceService, { getProfile: () => profile('chat_completions'), getApiKey: () => 'test-key' } as unknown as AppStore).ask('发布前需要做什么？')
+    expect(result).toMatchObject({ confidence: 'grounded', citationMode: 'model', citations: [{ materialId: 'm1', chunkId: 'c1' }] })
+    expect(result.answer).toBe('发布前先执行回滚演练。')
+  })
+
+  it('unwraps a double-encoded final response instead of rendering the JSON envelope', async () => {
+    const workspace = {
+      searchKnowledgeAsync: vi.fn().mockResolvedValue({ hits: [], mode: 'fts' }),
+      listMaterials: vi.fn().mockReturnValue([{ id: 'm1', title: 'Go 指南', type: 'document', status: 'complete', excerpt: '第 1 章介绍 Go。', extractedText: null, sourcePath: null, availability: 'available' }]),
+      getSettings: vi.fn().mockReturnValue(settings('profile'))
+    }
+    const payload = JSON.stringify({ type: 'final', scope: 'workspace', answer: '建议从第 1 章开始。', sources: [] })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(payload) } }] }), { headers: { 'content-type': 'application/json' } })))
+    const result = await new AiService(workspace as unknown as WorkspaceService, { getProfile: () => profile('chat_completions'), getApiKey: () => 'test-key' } as unknown as AppStore).ask('Go 相关文档应该从哪里开始看？')
+    expect(result.answer).toBe('建议从第 1 章开始。')
+    expect(result.answer).not.toContain('"type"')
+  })
+
   it('answers the compound inventory question from the full workspace snapshot when FTS misses', async () => {
     const workspace = {
       searchKnowledgeAsync: vi.fn().mockResolvedValue({ hits: [], mode: 'fts' }),
@@ -59,6 +85,15 @@ describe('AiService protocol requests', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
+  it('uses the configured model for a general question even when the workspace is empty', async () => {
+    const workspace = { searchKnowledgeAsync: vi.fn().mockResolvedValue({ hits: [], mode: 'fts' }), listMaterials: vi.fn().mockReturnValue([]), getSettings: vi.fn().mockReturnValue(settings('profile')) }
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ type: 'final', scope: 'general', answer: 'HTTP 是一种应用层协议。', sources: [] }) } }] }), { headers: { 'content-type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    const result = await new AiService(workspace as unknown as WorkspaceService, { getProfile: () => profile('chat_completions'), getApiKey: () => 'test-key' } as unknown as AppStore).ask('HTTP 是什么？')
+    expect(fetchMock).toHaveBeenCalledOnce()
+    expect(result).toMatchObject({ answer: 'HTTP 是一种应用层协议。', answerScope: 'general', confidence: 'grounded', model: 'test-model', citations: [], retrievedChunks: 0 })
+  })
+
   it('keeps the exact workspace count when catalog summaries exceed the context budget', async () => {
     const materials = Array.from({ length: 120 }, (_, index) => ({ id: `m${index}`, title: `Material ${index}`, type: 'note', status: 'complete', excerpt: 'x'.repeat(500), extractedText: null, sourcePath: null, availability: 'available' }))
     const workspace = { searchKnowledgeAsync: vi.fn().mockResolvedValue({ hits: [], mode: 'fts' }), listMaterials: vi.fn().mockReturnValue(materials), getSettings: vi.fn().mockReturnValue(settings('profile')) }
@@ -67,7 +102,7 @@ describe('AiService protocol requests', () => {
     const result = await new AiService(workspace as unknown as WorkspaceService, { getProfile: () => profile('chat_completions'), getApiKey: () => 'test-key' } as unknown as AppStore).ask('我们有多少资料')
     const requestBody = String(fetchMock.mock.calls[0][1]?.body)
     expect(requestBody).toContain('workspace material count is exactly 120')
-    expect(requestBody).toMatch(/omits [1-9]\d* from expanded context/)
+    expect(requestBody).toMatch(/omits [1-9]\d* summaries from expanded context/)
     expect(result).toMatchObject({ answer: '当前工作台共有 120 份材料。', confidence: 'grounded', model: 'test-model' })
   })
 
@@ -112,7 +147,7 @@ describe('AiService protocol requests', () => {
     expect(result.answer).not.toContain('m1:c1')
   })
 
-  it('does not accept a catalog marker as the required citation for retrieved content', async () => {
+  it('attaches the retrieved chunk when the model returns a catalog marker instead', async () => {
     const hit = { materialId: 'm1', chunkId: 'c1', title: 'Guide', text: 'The release requires a rollback test.', score: 1, sourcePath: '/guide.md', pageNumber: null, heading: 'Release', availability: 'available' }
     const workspace = {
       searchKnowledgeAsync: vi.fn().mockResolvedValue({ hits: [hit], mode: 'fts' }),
@@ -121,7 +156,141 @@ describe('AiService protocol requests', () => {
     }
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ choices: [{ message: { content: '需要做回滚测试。[m1:catalog]' } }] }), { headers: { 'content-type': 'application/json' } })))
     const result = await new AiService(workspace as unknown as WorkspaceService, { getProfile: () => profile('chat_completions'), getApiKey: () => 'test-key' } as unknown as AppStore).ask('发布要求是什么？')
-    expect(result).toMatchObject({ confidence: 'insufficient-evidence', citations: [], model: 'test-model' })
+    expect(result).toMatchObject({ confidence: 'grounded', citationMode: 'inferred', citations: [{ materialId: 'm1', chunkId: 'c1' }], model: 'test-model' })
+    expect(result.answer).toBe('需要做回滚测试。[1]')
+  })
+
+  it('retries an over-conservative model answer and keeps the local evidence citation', async () => {
+    const hit = { materialId: 'm1', chunkId: 'c1', title: 'Go 基础', text: '第 1 章介绍变量、函数和接口。', score: 1, sourcePath: '/01-go.md', pageNumber: null, heading: '第 1 章', availability: 'available' }
+    const workspace = {
+      searchKnowledgeAsync: vi.fn().mockResolvedValue({ hits: [hit], mode: 'fts' }),
+      listMaterials: vi.fn().mockReturnValue([{ id: 'm1', title: 'Go 基础', type: 'document', status: 'complete', excerpt: hit.text, extractedText: null, sourcePath: '/01-go.md', availability: 'available' }]),
+      getSettings: vi.fn().mockReturnValue(settings('profile'))
+    }
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ choices: [{ message: { content: '当前材料不足以回答这个问题。' } }] }), { headers: { 'content-type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ choices: [{ message: { content: '第 1 章介绍变量、函数和接口。[m1:c1]' } }] }), { headers: { 'content-type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    const result = await new AiService(workspace as unknown as WorkspaceService, { getProfile: () => profile('chat_completions'), getApiKey: () => 'test-key' } as unknown as AppStore).ask('Go 基础有哪些内容？')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(result).toMatchObject({ confidence: 'grounded', answer: '第 1 章介绍变量、函数和接口。[1]', citations: [{ materialId: 'm1', chunkId: 'c1' }] })
+  })
+
+  it('returns a deterministic local answer when a provider returns an empty response', async () => {
+    const hit = { materialId: 'm1', chunkId: 'c1', title: '部署说明', text: '发布前需要执行回滚演练。', score: 1, sourcePath: '/deploy.md', pageNumber: null, heading: '发布检查', availability: 'available' }
+    const workspace = {
+      searchKnowledgeAsync: vi.fn().mockResolvedValue({ hits: [hit], mode: 'fts' }),
+      listMaterials: vi.fn().mockReturnValue([{ id: 'm1', title: '部署说明', type: 'document', status: 'complete', excerpt: hit.text, extractedText: null, sourcePath: '/deploy.md', availability: 'available' }]),
+      getSettings: vi.fn().mockReturnValue(settings('profile'))
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ choices: [{ message: { content: '' } }] }), { headers: { 'content-type': 'application/json' } })))
+    const result = await new AiService(workspace as unknown as WorkspaceService, { getProfile: () => profile('chat_completions'), getApiKey: () => 'test-key' } as unknown as AppStore).ask('发布前需要做什么？')
+    expect(result).toMatchObject({ confidence: 'grounded', answerMode: 'local-fallback', citations: [{ materialId: 'm1', chunkId: 'c1' }] })
+    expect(result.answer).toContain('部署说明')
+  })
+
+  it('answers model capability questions from runtime configuration when the model refuses local evidence', async () => {
+    const workspace = { searchKnowledgeAsync: vi.fn().mockResolvedValue({ hits: [], mode: 'fts' }), listMaterials: vi.fn().mockReturnValue([{ id: 'm1', title: 'Guide', type: 'note', status: 'complete', excerpt: 'Local guide', extractedText: null, sourcePath: null, availability: 'available' }]), getSettings: vi.fn().mockReturnValue(settings('profile')) }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ choices: [{ message: { content: '证据不足。' } }] }), { headers: { 'content-type': 'application/json' } })))
+    const result = await new AiService(workspace as unknown as WorkspaceService, { getProfile: () => profile('chat_completions'), getApiKey: () => 'test-key' } as unknown as AppStore).ask('你是什么模型，你能做到什么？')
+    expect(result).toMatchObject({ confidence: 'grounded', answerMode: 'local-fallback', model: 'test-model' })
+    expect(result.answer).toContain('test-model')
+  })
+
+  it('answers six representative knowledge questions without an evidence-error result', async () => {
+    const hit = (materialId: string, title: string, text: string, heading: string) => ({ materialId, chunkId: `${materialId}-c1`, title, text, score: 1, sourcePath: `/${materialId}.md`, pageNumber: null, heading, availability: 'available' as const })
+    const go = hit('go', '03-Go核心语法', 'Go 语言的变量、函数和接口基础。', '第 3 章 Go 核心语法')
+    const goStart = hit('go-start', '01-Go为什么适合服务器开发', 'Go 入门概览和学习顺序。', '第 1 章')
+    const iface = hit('iface', '06-Interface设计思想', '接口定义与隐式实现。', '接口定义')
+    const deploy = hit('deploy', '发布检查', '上线前需要执行回滚演练。', '发布前检查')
+    const materials = [goStart, go, iface, deploy, hit('web', 'Web 服务开发', 'HTTP 服务和路由。', 'Web'), hit('storage', '数据存储', 'SQLite 与 Redis。', '存储')].map((item) => ({ id: item.materialId, title: item.title, type: 'document', status: 'complete', excerpt: item.text, extractedText: null, sourcePath: item.sourcePath, availability: 'available' }))
+    const searchKnowledgeAsync = vi.fn((query: string) => {
+      if (/Go|学习|第\s*0|从零/u.test(query)) return Promise.resolve({ hits: [go, goStart], mode: 'fts' as const })
+      if (/接口/u.test(query)) return Promise.resolve({ hits: [iface], mode: 'fts' as const })
+      if (/发布|上线/u.test(query)) return Promise.resolve({ hits: [deploy], mode: 'fts' as const })
+      return Promise.resolve({ hits: [], mode: 'fts' as const })
+    })
+    const workspace = { searchKnowledgeAsync, listMaterials: vi.fn().mockReturnValue(materials), getSettings: vi.fn().mockReturnValue(settings('profile')), listMaterialChunks: vi.fn((materialId: string) => [{ id: `${materialId}-c1`, materialId, text: materials.find((item) => item.id === materialId)?.excerpt ?? '', heading: null, pageNumber: null }]) }
+    const attempts = new Map<string, number>()
+    const fetchMock = vi.fn().mockImplementation(async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body)) as { messages?: Array<{ content?: string }> }
+      const prompt = body.messages?.[0]?.content ?? ''
+      const question = (prompt.match(/(?:Current question|Question): ([^\n]+)/u)?.[1] ?? '').trim()
+      const attempt = (attempts.get(question) ?? 0) + 1
+      attempts.set(question, attempt)
+      let content = '工作区材料已提供相关信息。'
+      if (/多少材料/u.test(question)) content = '当前工作区共有 6 份材料。'
+      else if (/从\s*0|第\s*0/u.test(question)) content = '{}'
+      else if (/学习 Go|Go 语言.*哪几章/u.test(question)) content = attempt === 1 ? '当前材料不足以回答这个问题。' : '建议先看 01-Go，再看 03-Go。[go-start:go-start-c1]'
+      else if (/接口/u.test(question)) content = '接口通过隐式实现降低耦合。'
+      else if (/概括|总结/u.test(question)) content = '工作区覆盖 Go 基础、Web 服务和数据存储。'
+      else if (/什么模型|能做到/u.test(question)) content = '证据不足。'
+      return new Response(JSON.stringify({ choices: [{ message: { content } }] }), { headers: { 'content-type': 'application/json' } })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const ai = new AiService(workspace as unknown as WorkspaceService, { getProfile: () => profile('chat_completions'), getApiKey: () => 'test-key' } as unknown as AppStore)
+    const questions = ['我们一共有多少材料？', '我想学习 Go 语言的基础，可以看哪几章？', '我想学习 Go 语言，从第 0 章开始第一步是什么？', '接口是什么？', '请用三句话概括这个工作区的内容。', '你是什么模型，你能做到什么？']
+    const results = []
+    for (const question of questions) results.push(await ai.ask(question))
+    expect(results).toHaveLength(questions.length)
+    for (const result of results) {
+      expect(result.confidence).toBe('grounded')
+      expect(result.model).toBe('test-model')
+      expect(result.answer.length).toBeGreaterThan(2)
+      expect(result.answer).not.toMatch(/证据不足|材料不足以回答|模型没有返回可用回答/u)
+    }
+    expect(results[0].answer).toContain('6')
+    expect(results[2].answer).toContain('Go')
+    expect(results[3].citations).toHaveLength(1)
+    expect(fetchMock).toHaveBeenCalledTimes(8)
+  })
+
+  it('lets the model call a local Material Map tool before answering', async () => {
+    const hit = { materialId: 'm1', chunkId: 'c1', title: '部署说明', text: '上线前执行回滚演练。', score: 1, sourcePath: '/deploy.md', pageNumber: null, heading: '发布检查', availability: 'available' as const }
+    const searchKnowledgeAsync = vi.fn().mockResolvedValue({ hits: [hit], mode: 'fts' as const })
+    const workspace = {
+      searchKnowledgeAsync,
+      listMaterials: vi.fn().mockReturnValue([{ id: 'm1', title: '部署说明', type: 'document', status: 'complete', excerpt: hit.text, extractedText: null, sourcePath: hit.sourcePath, availability: 'available' }]),
+      getMaterial: vi.fn().mockReturnValue({ id: 'm1', title: '部署说明', type: 'document', status: 'complete', excerpt: hit.text, extractedText: hit.text, sourcePath: hit.sourcePath, availability: 'available' }),
+      listMaterialChunks: vi.fn().mockReturnValue([{ id: 'c1', materialId: 'm1', ordinal: 0, text: hit.text, heading: hit.heading, pageNumber: null }]),
+      getSettings: vi.fn().mockReturnValue(settings('profile'))
+    }
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ type: 'tool_call', name: 'search_materials', arguments: { query: '发布前需要做什么', limit: 4 } }) } }] }), { headers: { 'content-type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ type: 'final', answer: '上线前执行回滚演练。[m1:c1]', sources: ['m1:c1'] }) } }] }), { headers: { 'content-type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    const result = await new AiService(workspace as unknown as WorkspaceService, { getProfile: () => profile('chat_completions'), getApiKey: () => 'test-key' } as unknown as AppStore).ask('发布前需要做什么？')
+    expect(searchKnowledgeAsync).toHaveBeenCalledWith('发布前需要做什么', { limit: 4 })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(result).toMatchObject({ answer: '上线前执行回滚演练。[1]', confidence: 'grounded', toolCalls: [{ name: 'search_materials' }], citations: [{ materialId: 'm1', chunkId: 'c1' }] })
+  })
+
+  it('runs a multi-tool board operation as a reviewable proposal instead of a direct mutation', async () => {
+    const materials = [
+      { id: 'm1', title: 'Go 基础', type: 'document', status: 'complete', excerpt: '基础语法', extractedText: '基础语法', sourcePath: null, availability: 'available' },
+      { id: 'm2', title: 'Go 并发', type: 'document', status: 'complete', excerpt: '并发编程', extractedText: '并发编程', sourcePath: null, availability: 'available' }
+    ]
+    const topicMap = { topic: { id: 't1', name: '学习路径', description: '', revision: 0 }, materials, relations: [], workstreams: [] }
+    const createTopicProposals = vi.fn().mockReturnValue([{ id: 'p1', topicId: 't1', kind: 'create_relation', status: 'pending' }])
+    const workspace = {
+      getSettings: vi.fn().mockReturnValue(settings('profile')),
+      listMaterials: vi.fn().mockReturnValue(materials),
+      searchKnowledgeAsync: vi.fn().mockResolvedValue({ hits: [], mode: 'fts' }),
+      listTopics: vi.fn().mockReturnValue([topicMap.topic]),
+      topicMap: vi.fn().mockReturnValue(topicMap),
+      createTopicProposals
+    }
+    const responses = [
+      { type: 'tool_call', name: 'list_topics', arguments: {} },
+      { type: 'tool_call', name: 'get_topic_context', arguments: { topicId: 't1' } },
+      { type: 'tool_call', name: 'propose_topic_changes', arguments: { topicId: 't1', actions: [{ kind: 'create_relation', reason: '先基础后并发。', evidence: '两个标题体现学习顺序。', payload: { sourceMaterialId: 'm1', targetMaterialId: 'm2', relationType: 'next', label: '下一步' } }] } },
+      { type: 'final', scope: 'action', answer: '已创建一条待审核的学习关系，请在主题画板中确认。', sources: [] }
+    ]
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(responses.shift()) } }] }), { headers: { 'content-type': 'application/json' } })))
+    const result = await new AiService(workspace as unknown as WorkspaceService, { getProfile: () => profile('chat_completions'), getApiKey: () => 'test-key' } as unknown as AppStore).ask('把 Go 基础连接到 Go 并发，作为学习下一步。')
+    expect(result).toMatchObject({ answerScope: 'action', toolCalls: [{ name: 'list_topics' }, { name: 'get_topic_context' }, { name: 'propose_topic_changes' }] })
+    expect(createTopicProposals).toHaveBeenCalledOnce()
+    expect(topicMap.relations).toHaveLength(0)
   })
 
   it('uses Responses with store disabled and parses output_text', async () => {

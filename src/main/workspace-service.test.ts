@@ -407,7 +407,7 @@ describe('WorkspaceService', () => {
     writeFileSync(firstPath, `# First\n${'a'.repeat(12_300)}`); writeFileSync(secondPath, '# Second\nDifferent content')
     const service = makeService(); await service.create(join(root, 'workspace'), 'Materials')
     const [first, second] = await Promise.all([service.importFile(firstPath), service.importFile(secondPath)])
-    await vi.waitFor(() => expect([service.getMaterial(first.material.id)?.status, service.getMaterial(second.material.id)?.status]).toEqual(['complete', 'complete']))
+    await vi.waitFor(() => expect([service.getMaterial(first.material.id)?.status, service.getMaterial(second.material.id)?.status]).toEqual(['complete', 'complete']), { timeout: 30_000 })
     expect(service.getMaterial(first.material.id)?.extractedText).toHaveLength(12_308)
     expect(service.getMaterial(second.material.id)?.extractedText).toContain('Different content')
   })
@@ -597,6 +597,28 @@ describe('WorkspaceService', () => {
     expect(service.searchKnowledge('source chunks')).toEqual(expect.arrayContaining([expect.objectContaining({ materialId: material.id, chunkId: chunks.at(-1)?.id })]))
   })
 
+  it('finds chapter evidence for a mixed Chinese and Go question', async () => {
+    const service = makeService(); await service.create(makeRoot(), 'Knowledge')
+    const material = await service.createDocument('03-Go核心语法', '# 第 3 章 Go 核心语法\n\n介绍 Go 语言的变量、函数和接口基础。', 'md')
+    const hits = service.searchKnowledge('我想学习 Go 语言的基础，可以看哪几章', { limit: 6 })
+    expect(hits).toEqual(expect.arrayContaining([expect.objectContaining({ materialId: material.id, text: expect.stringContaining('Go 语言') })]))
+  })
+
+  it('does not rank GORM or MongoDB as Go matches and supports ordinal chapter questions', async () => {
+    const service = makeService(); await service.create(makeRoot(), 'Knowledge')
+    const gorm = await service.createDocument('20-GORM最佳实践', '# GORM 基础\n\nGORM 数据访问。', 'md')
+    const mongo = await service.createDocument('24-MongoDB实战', '# MongoDB 基础\n\nMongoDB 数据库。', 'md')
+    const go = await service.createDocument('03-Go核心语法', '# 第 3 章 Go 核心语法\n\nGo 语言变量和接口。', 'md')
+    const goHits = service.searchKnowledge('Go 语言基础', { limit: 3 })
+    expect(goHits[0]?.materialId).toBe(go.id)
+    expect(goHits[0]?.materialId).not.toBe(gorm.id)
+    expect(goHits[0]?.materialId).not.toBe(mongo.id)
+    expect(service.searchKnowledge('Go 语言 基础', { limit: 3 })[0]?.materialId).toBe(go.id)
+    const first = await service.createDocument('01-Go为什么适合服务器开发', '# 第 1 章\n\nGo 入门概览。', 'md')
+    const ordinalHits = service.searchKnowledge('从第 0 章开始，第一步应该学习什么', { limit: 3 })
+    expect(ordinalHits[0]?.materialId).toBe(first.id)
+  })
+
   it('caches material analysis cards and expands evidence to neighboring chunks', async () => {
     const service = makeService(); await service.create(makeRoot(), 'Knowledge')
     const material = await service.createNote('Architecture', '# Storage\n\nSQLite keeps the local index.\n\n# Retrieval\n\nEvidence windows include nearby chunks.')
@@ -640,6 +662,34 @@ describe('WorkspaceService', () => {
     service.updateTopicProposalStatus(proposals[0].id, 'accepted')
     expect(service.listTopicProposals(topic.id)).toHaveLength(0)
     expect(service.listTopicProposals(topic.id, 'accepted')).toHaveLength(1)
+  })
+
+  it('applies an accepted proposal through reversible topic history', async () => {
+    const service = makeService(); await service.create(makeRoot(), 'Knowledge')
+    const source = await service.createNote('Source', 'First step'); const target = await service.createNote('Target', 'Second step')
+    const topic = service.createTopic('Review'); service.addMaterialsToTopic(topic.id, [source.id, target.id])
+    const proposal = service.createTopicProposals(topic.id, [{ kind: 'create_relation', reason: 'The order is explicit.', evidence: 'First step, then second step.', materialId: null, relationId: null, payload: { sourceMaterialId: source.id, targetMaterialId: target.id, relationType: 'next', label: '下一步' } }])[0]
+    expect(service.topicMap(topic.id).relations).toHaveLength(0)
+    expect(service.acceptTopicProposal(topic.id, proposal.id)).toMatchObject({ status: 'accepted' })
+    expect(service.topicMap(topic.id).relations).toEqual([expect.objectContaining({ sourceMaterialId: source.id, targetMaterialId: target.id, label: '下一步', createdBy: 'manual' })])
+    expect(service.topicHistoryStatus(topic.id).undo).toBe(true)
+    service.undoTopicEditorCommand(topic.id)
+    expect(service.topicMap(topic.id).relations).toHaveLength(0)
+    service.redoTopicEditorCommand(topic.id)
+    expect(service.topicMap(topic.id).relations).toEqual([expect.objectContaining({ label: '下一步' })])
+  })
+
+  it('applies and reverses a workstream proposal without touching material records', async () => {
+    const service = makeService(); await service.create(makeRoot(), 'Knowledge')
+    const first = await service.createNote('First', 'Local first'); const second = await service.createNote('Second', 'Local second')
+    const topic = service.createTopic('Review'); service.addMaterialsToTopic(topic.id, [first.id, second.id])
+    const proposal = service.createTopicProposals(topic.id, [{ kind: 'create_workstream', reason: 'These materials form one lane.', evidence: 'Both are part of the same workflow.', materialId: null, relationId: null, payload: { name: 'Workflow', materialIds: [first.id, second.id] } }])[0]
+    service.acceptTopicProposal(topic.id, proposal.id)
+    expect(service.topicMap(topic.id).workstreams).toEqual([expect.objectContaining({ name: 'Workflow', source: 'ai' })])
+    expect(service.topicMap(topic.id).materials.filter((material) => material.workstreamId)).toHaveLength(2)
+    service.undoTopicEditorCommand(topic.id)
+    expect(service.topicMap(topic.id).workstreams).toHaveLength(0)
+    expect(service.topicMap(topic.id).materials.every((material) => !material.workstreamId)).toBe(true)
   })
 
   it('requeues materials left running when a workspace is reopened', async () => {

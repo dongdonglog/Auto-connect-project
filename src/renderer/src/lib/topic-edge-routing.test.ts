@@ -28,6 +28,14 @@ describe('buildTopicEdgeRoute', () => {
     expect(route.points).toEqual([{ x: 0, y: 0 }, { x: 80, y: 0 }, { x: 80, y: 100 }, { x: 200, y: 100 }])
   })
 
+  it('ends an orthogonal route in the direction of the target port', () => {
+    const route = buildTopicEdgeRoute({ source: { x: 180, y: 105 }, target: { x: 340, y: 175 }, obstacles: [], sourcePosition: 'right', targetPosition: 'left' })
+    const last = segments(route.points).at(-1)!
+    expect(last.end).toEqual({ x: 340, y: 175 })
+    expect(last.start.y).toBe(175)
+    expect(last.start.x).toBeLessThan(last.end.x)
+  })
+
   it('keeps a label away from source and target cards without blocking its route', () => {
     const sourceCard = { x: 0, y: 50, width: 180, height: 110 }
     const targetCard = { x: 340, y: 50, width: 180, height: 110 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { chunkHash, chunkText, tokenize } from './indexer'
+import { chunkHash, chunkText, searchTerms, tokenize } from './indexer'
 
 describe('chunkText', () => {
   it('returns an empty list for blank input', () => {
@@ -64,5 +64,11 @@ describe('tokenize', () => {
 
   it('returns an empty list for punctuation-only input', () => {
     expect(tokenize('!@#$%^&*()')).toEqual([])
+  })
+})
+
+describe('searchTerms', () => {
+  it('extracts searchable mixed-language fragments without changing tokenize semantics', () => {
+    expect(searchTerms('我想学习 Go 语言的基础')).toEqual(expect.arrayContaining(['go', '语言', '基础']))
   })
 })

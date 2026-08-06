@@ -4,6 +4,7 @@ import { WorkspaceService } from './workspace-service'
 import { AiService } from './ai-service'
 import type { KnowledgeQuestion, ModelSettings, ProviderProfileInput } from './types'
 import { AppStore } from './app-store'
+import { MaterialMapMcpServer } from './material-mcp'
 import { resetLearningPathDemo } from './demo-service'
 import { assertEnum, assertId, assertLimit, assertNumber, assertString, IpcValidationError } from './ipc-validation'
 
@@ -13,6 +14,7 @@ let window: BrowserWindow | null = null
 const workspace = new WorkspaceService()
 let appStore: AppStore
 let ai: AiService
+let materialTools: MaterialMapMcpServer
 
 
 function createWindow(): void {
@@ -106,6 +108,9 @@ function registerIpc(): void {
   ipcMain.handle('topics:undo', (_event, topicId: string) => workspace.undoTopicEditorCommand(assertId(topicId, '主题标识')))
   ipcMain.handle('topics:redo', (_event, topicId: string) => workspace.redoTopicEditorCommand(assertId(topicId, '主题标识')))
   ipcMain.handle('topics:history', (_event, topicId: string) => workspace.topicHistoryStatus(assertId(topicId, '主题标识')))
+  ipcMain.handle('topics:proposals', (_event, topicId: string) => workspace.listTopicProposals(assertId(topicId, '主题标识')))
+  ipcMain.handle('topics:acceptProposal', (_event, topicId: string, proposalId: string) => workspace.acceptTopicProposal(assertId(topicId, '主题标识'), assertId(proposalId, '提案标识')))
+  ipcMain.handle('topics:archiveProposal', (_event, topicId: string, proposalId: string) => workspace.archiveTopicProposal(assertId(topicId, '主题标识'), assertId(proposalId, '提案标识')))
   ipcMain.handle('relations:create', (_event, relation) => workspace.createRelation({ ...relation, sourceMaterialId: assertId(relation?.sourceMaterialId, '来源材料标识'), targetMaterialId: assertId(relation?.targetMaterialId, '目标材料标识'), label: assertString(relation?.label, '关系标签', 64) }))
   ipcMain.handle('relations:update', (_event, id: string, label: string) => workspace.updateRelation(id, label))
   ipcMain.handle('relations:delete', (_event, id: string) => workspace.deleteRelation(id))
@@ -127,6 +132,8 @@ function registerIpc(): void {
   ipcMain.handle('workspace:recent', () => appStore.listRecent())
   ipcMain.handle('workspace:forgetRecent', (_event, root: string) => appStore.forgetWorkspace(root))
   ipcMain.handle('ai:ask', (_event, question: string | KnowledgeQuestion) => ai.ask(question))
+  ipcMain.handle('ai:tools:list', () => materialTools.listTools())
+  ipcMain.handle('ai:tools:call', (_event, name: string, args: Record<string, unknown>) => materialTools.call(assertString(name, '工具名称', 80), args && typeof args === 'object' && !Array.isArray(args) ? args : {}))
   ipcMain.handle('ai:explainRelation', (_event, relationId: string) => ai.explainMaterialRelation(assertId(relationId, '关系标识')))
 }
 
@@ -144,5 +151,5 @@ function createMenu(): void {
   ] }]))
 }
 
-app.whenReady().then(() => { appStore = new AppStore(app.getPath('userData'), safeStorage); ai = new AiService(workspace, appStore); registerIpc(); createMenu(); createWindow(); app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() }) })
+app.whenReady().then(() => { appStore = new AppStore(app.getPath('userData'), safeStorage); ai = new AiService(workspace, appStore); materialTools = new MaterialMapMcpServer(workspace); registerIpc(); createMenu(); createWindow(); app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() }) })
 app.on('window-all-closed', () => { workspace.close(); if (process.platform !== 'darwin') app.quit() })

@@ -7,7 +7,7 @@ import { ZipArchive } from 'archiver'
 import unzipper from 'unzipper'
 import { decrypt, deriveKey, encrypt, createSalt } from './crypto'
 import { extractFile, fetchLinkMetadata, plainExcerpt, type ExtractedMaterial } from './parsers'
-import { chunkHash, chunkText, tokenize } from './indexer'
+import { chunkHash, chunkText, searchTerms, tokenize } from './indexer'
 import { detectVectorCapability, type VectorCapability } from './db/vector-capability'
 import { VectorStore } from './db/vector-store'
 import { NativeDatabase } from './db/native-database'
@@ -19,6 +19,81 @@ interface WorkspaceConfig { id: string; name: string; encrypted: boolean; salt?:
 const now = () => new Date().toISOString()
 const id = () => randomUUID()
 const MAX_AUTO_EXTRACT_BYTES = 10 * 1024 * 1024
+
+// Chinese questions contain many grammatical words that are useful to a
+// person but make a lexical search noisy. Keep this list deliberately small:
+// domain words such as "材料" and "接口" must remain searchable.
+const knowledgeStopTerms = new Set([
+  '的', '了', '是', '我', '你', '他', '她', '它', '我们', '你们', '他们',
+  '请', '帮', '想', '看', '查', '问', '一下', '现在', '目前', '这里', '里面',
+  '有什么', '哪些', '哪个', '怎么', '如何', '为什么', '多少', '一共', '总共',
+  '能否', '可以', '是否', '有关', '关于', '以及', '还有', '哪些'
+])
+
+function knowledgeQueryTerms(query: string): string[] {
+  return searchTerms(query).filter((term) => !knowledgeStopTerms.has(term) && term.length > 1)
+}
+
+function containsKnowledgeTerm(value: string, term: string): boolean {
+  const normalized = value.toLocaleLowerCase()
+  const candidate = term.toLocaleLowerCase()
+  // A Latin query term must match a complete token. Without this guard,
+  // searching for "Go" ranks GORM and MongoDB because both contain "go".
+  if (/^[a-z0-9][a-z0-9_+#.-]*$/iu.test(candidate)) {
+    const escaped = candidate.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
+    // Hyphens and dots commonly separate a chapter number or a file-style
+    // title (for example `03-Go核心语法`). They are not part of a Latin word
+    // boundary, so `Go` must still match there without matching `GORM`.
+    return new RegExp(`(?:^|[^a-z0-9_+#])${escaped}(?:$|[^a-z0-9_+#])`, 'iu').test(normalized)
+  }
+  return normalized.includes(candidate)
+}
+
+function leadingChapterNumber(value: string): number | null {
+  const match = value.match(/(?:^|[/\\])([0-9]{1,3})[-_、.]/u)
+  return match ? Number(match[1]) : null
+}
+
+function rankKnowledgeHits(query: string, hits: SearchHit[], limit: number, onePerMaterial = false): SearchHit[] {
+  const normalizedQuery = query.toLocaleLowerCase().replace(/\s+/gu, '')
+  const terms = knowledgeQueryTerms(query)
+  const learningQuestion = /(?:哪(?:几|些)章|章节|学习|基础|入门|从头|从零|第一步)/u.test(query)
+  if (!terms.length) return hits.slice(0, limit)
+  const ranked = hits.map((hit, index) => {
+    const title = hit.title.toLocaleLowerCase()
+    const heading = (hit.heading ?? '').toLocaleLowerCase()
+    const text = hit.text.toLocaleLowerCase()
+    const haystack = `${title} ${heading} ${text}`
+    const matched = terms.reduce((score, term) => score + (containsKnowledgeTerm(haystack, term) ? 1 : 0), 0)
+    const titleMatched = terms.reduce((score, term) => score + (containsKnowledgeTerm(title, term) ? 1 : 0), 0)
+    const headingMatched = terms.reduce((score, term) => score + (containsKnowledgeTerm(heading, term) ? 1 : 0), 0)
+    const phrase = normalizedQuery.length > 2 && containsKnowledgeTerm(`${title}${heading}${text}`.replace(/\s+/gu, ''), normalizedQuery) ? 4 : 0
+    const lexical = matched / terms.length
+    // SearchHit.score is bm25/vector score; use it only as a tie-breaker so a
+    // noisy provider result cannot outrank an exact title/heading match.
+    const titleExact = terms.some((term) => /^[a-z0-9][a-z0-9_+#.-]*$/iu.test(term) && containsKnowledgeTerm(title, term)) ? 3 : 0
+    const chapterNumber = leadingChapterNumber(hit.title) ?? leadingChapterNumber(hit.sourcePath ?? '')
+    const numberedChapter = chapterNumber === null ? 0 : 0.4
+    const sequenceBoost = learningQuestion && chapterNumber !== null ? Math.max(0, 3 - chapterNumber / 100) : 0
+    const score = phrase + lexical * 6 + titleMatched * 2.5 + headingMatched * 1.5 + titleExact * 8 + numberedChapter + sequenceBoost + Math.max(0, Math.min(1, hit.score)) * .25
+    return { hit, score, index }
+  })
+  const byMaterial = new Map<string, number>()
+  const seenChunks = new Set<string>()
+  return ranked
+    .sort((left, right) => right.score - left.score || left.index - right.index)
+    .filter(({ hit }) => {
+      const chunkKey = `${hit.materialId}:${hit.chunkId ?? `material:${hit.materialId}`}`
+      if (seenChunks.has(chunkKey)) return false
+      const count = byMaterial.get(hit.materialId) ?? 0
+      if (count >= (onePerMaterial ? 1 : 2)) return false
+      seenChunks.add(chunkKey)
+      byMaterial.set(hit.materialId, count + 1)
+      return true
+    })
+    .slice(0, limit)
+    .map(({ hit }) => hit)
+}
 
 function first<T>(rows: SqlRow[]): T | null { return (rows[0] as T) ?? null }
 function asMaterial(row: SqlRow): Material {
@@ -637,6 +712,46 @@ export class WorkspaceService {
       this.requireDb().run('UPDATE relations SET label=? WHERE id=?', [label, relationId])
       return { inverse: { kind: 'renameRelation', payload: { relationId, label: String(row.label) } } }
     }
+    if (command.kind === 'setSequence') {
+      const materialId = this.commandId(payload.materialId, 'Material id'); const row = this.topicMaterialRow(topicId, materialId); const sequence = Number(payload.sequence)
+      if (!Number.isInteger(sequence) || sequence < 1) throw new Error('Sequence must be a positive integer.')
+      this.requireDb().run("UPDATE topic_materials SET sequence=?, sequence_source='manual' WHERE topic_id=? AND material_id=?", [sequence, topicId, materialId])
+      return { inverse: { kind: 'restoreSequence', payload: { materialId, sequence: row.sequence, sequenceSource: String(row.sequence_source ?? 'time') } } }
+    }
+    if (command.kind === 'restoreSequence') {
+      const materialId = this.commandId(payload.materialId, 'Material id'); const row = this.topicMaterialRow(topicId, materialId)
+      const sequence = payload.sequence === null || payload.sequence === undefined ? null : Number(payload.sequence)
+      if (sequence !== null && (!Number.isInteger(sequence) || sequence < 1)) throw new Error('Sequence history is invalid.')
+      this.requireDb().run('UPDATE topic_materials SET sequence=?, sequence_source=? WHERE topic_id=? AND material_id=?', [sequence, payload.sequenceSource === 'manual' ? 'manual' : 'time', topicId, materialId])
+      return { inverse: { kind: 'restoreSequence', payload: { materialId, sequence: row.sequence, sequenceSource: String(row.sequence_source ?? 'time') } } }
+    }
+    if (command.kind === 'createWorkstream') {
+      const name = normalizeOptionalText(payload.name, 80)
+      if (!name) throw new Error('Workstream name is required.')
+      if (!Array.isArray(payload.materialIds) || !payload.materialIds.length || payload.materialIds.length > 500) throw new Error('Workstream materials are invalid.')
+      const materialIds = [...new Set(payload.materialIds.map((value) => this.commandId(value, 'Material id')))]
+      const previousAssignments = materialIds.map((materialId) => { const row = this.topicMaterialRow(topicId, materialId); return { materialId, workstreamId: row.workstream_id as string | null } })
+      const workstreamId = payload.workstreamId ? this.commandId(payload.workstreamId, 'Workstream id') : id()
+      if (this.query('SELECT id FROM workstreams WHERE id=?', [workstreamId])[0]) throw new Error('Workstream already exists.')
+      const position = Number(this.query('SELECT COUNT(*) AS count FROM workstreams WHERE topic_id=?', [topicId])[0]?.count ?? 0)
+      this.requireDb().run('INSERT INTO workstreams VALUES (?, ?, ?, ?, ?)', [workstreamId, topicId, name, position, 'ai'])
+      for (const materialId of materialIds) this.requireDb().run('UPDATE topic_materials SET workstream_id=? WHERE topic_id=? AND material_id=?', [workstreamId, topicId, materialId])
+      return { forward: { kind: 'createWorkstream', payload: { workstreamId, name, materialIds } }, inverse: { kind: 'removeWorkstream', payload: { workstreamId, previousAssignments } } }
+    }
+    if (command.kind === 'removeWorkstream') {
+      const workstreamId = this.commandId(payload.workstreamId, 'Workstream id'); const stream = this.query('SELECT * FROM workstreams WHERE id=? AND topic_id=?', [workstreamId, topicId])[0]
+      if (!stream) throw new Error('Workstream not found.')
+      const currentMaterialIds = this.query('SELECT material_id FROM topic_materials WHERE topic_id=? AND workstream_id=?', [topicId, workstreamId]).map((row) => String(row.material_id))
+      const previousAssignments = Array.isArray(payload.previousAssignments) ? payload.previousAssignments.map((value) => this.commandRecord(value)) : []
+      for (const assignment of previousAssignments) {
+        const materialId = this.commandId(assignment.materialId, 'Material id'); this.topicMaterialRow(topicId, materialId)
+        const previousId = assignment.workstreamId === null || assignment.workstreamId === undefined ? null : this.commandId(assignment.workstreamId, 'Workstream id')
+        this.requireDb().run('UPDATE topic_materials SET workstream_id=? WHERE topic_id=? AND material_id=?', [previousId, topicId, materialId])
+      }
+      this.requireDb().run('UPDATE topic_materials SET workstream_id=NULL WHERE topic_id=? AND workstream_id=?', [topicId, workstreamId])
+      this.requireDb().run('DELETE FROM workstreams WHERE id=?', [workstreamId])
+      return { inverse: { kind: 'createWorkstream', payload: { workstreamId, name: String(stream.name), materialIds: currentMaterialIds } } }
+    }
     if (command.kind === 'reconnectRelation') {
       const relationId = this.commandId(payload.relationId, 'Relation id'); const row = this.query('SELECT * FROM relations WHERE id=?', [relationId])[0]
       if (!row) throw new Error('Relationship not found.')
@@ -1034,15 +1149,30 @@ export class WorkspaceService {
     if (!this.vectorStore || !this.embeddingProvider) return { hits: lexical, mode: 'fts' }
     try {
       const vectors = await this.embeddingProvider([query]); const vector = vectors?.[0]; if (!vector) return { hits: lexical, mode: 'fts' }
-      const vectorHits = this.vectorStore.search(vector, options.limit ?? 8)
+      const limit = Math.max(1, Math.min(options.limit ?? 8, 30))
+      const vectorHits = this.vectorStore.search(vector, Math.min(50, limit * 4))
       const byChunk = new Map(lexical.map((hit) => [hit.chunkId, hit]))
       const missingIds = vectorHits.map((hit) => hit.chunkId).filter((chunkId) => !byChunk.has(chunkId))
       if (missingIds.length) {
         const placeholders = missingIds.map(() => '?').join(',')
-        const rows = this.query(`SELECT c.id AS chunkId, c.material_id AS materialId, m.title, c.text, c.heading, c.page_number AS pageNumber, m.source_path AS sourcePath, COALESCE(mis.availability, 'available') AS availability FROM material_chunks c JOIN materials m ON m.id=c.material_id LEFT JOIN material_index_state mis ON mis.material_id=m.id WHERE c.id IN (${placeholders})`, missingIds)
+        const rows = this.query(`SELECT c.id AS chunkId, c.material_id AS materialId, m.title, c.text, c.heading, c.page_number AS pageNumber, m.source_path AS sourcePath, COALESCE(mis.availability, 'available') AS availability FROM material_chunks c JOIN materials m ON m.id=c.material_id LEFT JOIN material_index_state mis ON mis.material_id=m.id WHERE c.id IN (${placeholders}) ${options.sourceId ? 'AND mis.source_id=?' : ''}`, [...missingIds, ...(options.sourceId ? [options.sourceId] : [])])
         for (const [index, row] of rows.entries()) byChunk.set(String(row.chunkId), { materialId: String(row.materialId), chunkId: String(row.chunkId), title: String(row.title), text: String(row.text), score: 1 / (index + 1), sourcePath: row.sourcePath as string | null, pageNumber: row.pageNumber === null ? null : Number(row.pageNumber), heading: row.heading as string | null, availability: (row.availability as SearchHit['availability']) ?? 'available' })
       }
-      const hits = vectorHits.map((hit) => byChunk.get(hit.chunkId)).filter((hit): hit is SearchHit => Boolean(hit))
+      const lexicalWithChunk = lexical.filter((hit): hit is SearchHit & { chunkId: string } => Boolean(hit.chunkId))
+      const lexicalRank = new Map(lexicalWithChunk.map((hit, index) => [hit.chunkId, index]))
+      const vectorRank = new Map(vectorHits.map((hit, index) => [hit.chunkId, index]))
+      const fused = [...new Set([...lexicalWithChunk.map((hit) => hit.chunkId), ...vectorHits.map((hit) => hit.chunkId)])]
+        .map((chunkId) => {
+          const hit = byChunk.get(chunkId)
+          if (!hit) return null
+          // Reciprocal-rank fusion keeps exact lexical matches visible while
+          // allowing an embedding-only hit to rescue paraphrased questions.
+          const score = (lexicalRank.has(chunkId) ? 1 / (60 + lexicalRank.get(chunkId)!) : 0) + (vectorRank.has(chunkId) ? 1 / (60 + vectorRank.get(chunkId)!) : 0)
+          return { ...hit, score }
+        })
+        .filter((hit): hit is SearchHit => Boolean(hit))
+        .sort((left, right) => right.score - left.score)
+      const hits = rankKnowledgeHits(query, fused, limit)
       return { hits: hits.length ? hits : lexical, mode: hits.length ? 'hybrid' : 'fts' }
     } catch { return { hits: lexical, mode: 'fts' } }
   }
@@ -1211,16 +1341,68 @@ export class WorkspaceService {
   updateTopicProposalStatus(proposalId: string, status: TopicProposal['status']): TopicProposal | null {
     this.run('UPDATE topic_proposals SET status=?, updated_at=? WHERE id=?', [status, now(), proposalId])
     const row = first<SqlRow>(this.query('SELECT * FROM topic_proposals WHERE id=?', [proposalId])); if (!row) return null
-    return this.listTopicProposals(String(row.topic_id), status)[0] ?? null
+    return this.listTopicProposals(String(row.topic_id), status).find((proposal) => proposal.id === proposalId) ?? null
+  }
+
+  acceptTopicProposal(topicId: string, proposalId: string): TopicProposal {
+    return this.withTransaction(() => {
+      const proposal = this.listTopicProposals(topicId).find((item) => item.id === proposalId)
+      if (!proposal) throw new Error('Pending proposal not found.')
+      const payload = proposal.payload
+      let command: TopicEditorCommand
+      if (proposal.kind === 'create_relation') {
+        command = { kind: 'createRelation', payload: { relation: { sourceMaterialId: payload.sourceMaterialId, targetMaterialId: payload.targetMaterialId, label: payload.label, relationType: payload.relationType ?? 'related', confidence: payload.confidence ?? null, evidenceMaterialId: null } } }
+      } else if (proposal.kind === 'rename_relation') {
+        command = { kind: 'renameRelation', payload: { relationId: proposal.relationId ?? payload.relationId, label: payload.label } }
+      } else if (proposal.kind === 'set_sequence') {
+        command = { kind: 'setSequence', payload: { materialId: proposal.materialId ?? payload.materialId, sequence: payload.sequence } }
+      } else if (proposal.kind === 'set_card_style') {
+        const materialId = proposal.materialId ?? payload.materialId
+        const { materialId: _materialId, ...patch } = payload
+        command = { kind: 'patchCard', payload: { materialId, patch } }
+      } else if (proposal.kind === 'layout') {
+        command = { kind: 'moveCards', payload: { positions: payload.positions } }
+      } else if (proposal.kind === 'create_workstream') {
+        command = { kind: 'createWorkstream', payload: { name: payload.name, materialIds: payload.materialIds } }
+      } else {
+        throw new Error('This proposal type is not supported by the board editor yet.')
+      }
+      this.executeTopicEditorCommand(topicId, command)
+      const accepted = this.updateTopicProposalStatus(proposalId, 'accepted')
+      if (!accepted) throw new Error('Proposal could not be accepted.')
+      return accepted
+    })
+  }
+
+  archiveTopicProposal(topicId: string, proposalId: string): TopicProposal {
+    const proposal = this.listTopicProposals(topicId).find((item) => item.id === proposalId)
+    if (!proposal) throw new Error('Pending proposal not found.')
+    const archived = this.updateTopicProposalStatus(proposalId, 'archived')
+    if (!archived) throw new Error('Proposal could not be archived.')
+    return archived
   }
 
   searchKnowledge(query: string, options: { limit?: number; sourceId?: string } = {}): SearchHit[] {
-    const limit = Math.max(1, Math.min(options.limit ?? 8, 30)); const terms = tokenize(query); if (!terms.length) return []
-    const rows = this.ftsEnabled
-      ? this.query(`SELECT c.id AS chunkId, c.material_id AS materialId, m.title, c.text, c.heading, c.page_number AS pageNumber, m.source_path AS sourcePath, COALESCE(mis.availability, 'available') AS availability FROM material_chunks_fts f JOIN material_chunks c ON c.id=f.chunk_id JOIN materials m ON m.id=c.material_id LEFT JOIN material_index_state mis ON mis.material_id=m.id WHERE f.material_chunks_fts MATCH ? ${options.sourceId ? 'AND mis.source_id=?' : ''} ORDER BY bm25(material_chunks_fts) LIMIT ?`, [terms.map((term) => `"${term.replace(/"/g, '')}"`).join(' OR '), ...(options.sourceId ? [options.sourceId] : []), limit])
-      : this.query(`SELECT c.id AS chunkId, c.material_id AS materialId, m.title, c.text, c.heading, c.page_number AS pageNumber, m.source_path AS sourcePath, COALESCE(mis.availability, 'available') AS availability FROM material_chunks c JOIN materials m ON m.id=c.material_id LEFT JOIN material_index_state mis ON mis.material_id=m.id WHERE (${terms.map(() => 'c.text LIKE ?').join(' OR ')}) ${options.sourceId ? 'AND mis.source_id=?' : ''} ORDER BY c.ordinal LIMIT ?`, [...terms.map((term) => `%${term}%`), ...(options.sourceId ? [options.sourceId] : []), limit])
-    const fallbackRows = rows.length ? rows : this.query(`SELECT m.id AS materialId, m.title, COALESCE(m.excerpt, m.extracted_text, '') AS text, m.source_path AS sourcePath, COALESCE(mis.availability, 'available') AS availability FROM materials m LEFT JOIN material_index_state mis ON mis.material_id=m.id WHERE (${terms.map(() => 'm.title LIKE ? OR m.extracted_text LIKE ? OR m.excerpt LIKE ?').join(' OR ')}) ${options.sourceId ? 'AND mis.source_id=?' : ''} ORDER BY m.imported_at DESC LIMIT ?`, [...terms.flatMap((term) => [`%${term}%`, `%${term}%`, `%${term}%`]), ...(options.sourceId ? [options.sourceId] : []), limit])
-    return fallbackRows.map((row, index) => ({ materialId: String(row.materialId), chunkId: String(row.chunkId ?? `material:${row.materialId}`), title: String(row.title), text: String(row.text), score: 1 / (index + 1), sourcePath: row.sourcePath as string | null, pageNumber: row.pageNumber === null || row.pageNumber === undefined ? null : Number(row.pageNumber), heading: row.heading as string | null ?? null, availability: (row.availability as SearchHit['availability']) ?? 'available' }))
+    const limit = Math.max(1, Math.min(options.limit ?? 8, 30)); const terms = searchTerms(query)
+    const ordinalQuestion = /(?:第\s*0\s*章|从\s*零|从头|第一步|入门|起步)/u.test(query)
+    const chapterQuestion = ordinalQuestion || /(?:哪(?:几|些)章|章节|学习|基础)/u.test(query)
+    if (!terms.length && !ordinalQuestion) return []
+    const candidateLimit = Math.min(120, Math.max(limit * 8, 24))
+    let rows: SqlRow[] = []
+    if (terms.length && this.ftsEnabled) {
+      rows = this.query(`SELECT c.id AS chunkId, c.material_id AS materialId, m.title, c.text, c.heading, c.page_number AS pageNumber, m.source_path AS sourcePath, COALESCE(mis.availability, 'available') AS availability FROM material_chunks_fts f JOIN material_chunks c ON c.id=f.chunk_id JOIN materials m ON m.id=c.material_id LEFT JOIN material_index_state mis ON mis.material_id=m.id WHERE f.material_chunks_fts MATCH ? ${options.sourceId ? 'AND mis.source_id=?' : ''} ORDER BY bm25(material_chunks_fts) LIMIT ?`, [terms.map((term) => `"${term.replace(/"/g, '')}"`).join(' OR '), ...(options.sourceId ? [options.sourceId] : []), candidateLimit])
+    }
+    // FTS can miss a Chinese question even when the exact text is present in
+    // an indexed chunk. Search chunks directly before falling back to one
+    // summary row per material so the model receives real chapter evidence.
+    if (!rows.length && terms.length) {
+      rows = this.query(`SELECT c.id AS chunkId, c.material_id AS materialId, m.title, c.text, c.heading, c.page_number AS pageNumber, m.source_path AS sourcePath, COALESCE(mis.availability, 'available') AS availability FROM material_chunks c JOIN materials m ON m.id=c.material_id LEFT JOIN material_index_state mis ON mis.material_id=m.id WHERE (${terms.map(() => 'c.text LIKE ? OR m.title LIKE ? OR c.heading LIKE ?').join(' OR ')}) ${options.sourceId ? 'AND mis.source_id=?' : ''} ORDER BY c.ordinal LIMIT ?`, [...terms.flatMap((term) => [`%${term}%`, `%${term}%`, `%${term}%`]), ...(options.sourceId ? [options.sourceId] : []), candidateLimit])
+    }
+    const fallbackRows = rows.length || !terms.length ? rows : this.query(`SELECT m.id AS materialId, m.title, COALESCE(m.excerpt, m.extracted_text, '') AS text, m.source_path AS sourcePath, COALESCE(mis.availability, 'available') AS availability FROM materials m LEFT JOIN material_index_state mis ON mis.material_id=m.id WHERE (${terms.map(() => 'm.title LIKE ? OR m.extracted_text LIKE ? OR m.excerpt LIKE ?').join(' OR ')}) ${options.sourceId ? 'AND mis.source_id=?' : ''} ORDER BY m.imported_at DESC LIMIT ?`, [...terms.flatMap((term) => [`%${term}%`, `%${term}%`, `%${term}%`]), ...(options.sourceId ? [options.sourceId] : []), candidateLimit])
+    const ordinalRows = chapterQuestion ? this.query(`SELECT c.id AS chunkId, c.material_id AS materialId, m.title, c.text, c.heading, c.page_number AS pageNumber, m.source_path AS sourcePath, COALESCE(mis.availability, 'available') AS availability FROM material_chunks c JOIN materials m ON m.id=c.material_id LEFT JOIN material_index_state mis ON mis.material_id=m.id WHERE c.ordinal=0 AND m.title GLOB '[0-9]*-*' ${options.sourceId ? 'AND mis.source_id=?' : ''} ORDER BY CAST(substr(m.title, 1, instr(m.title, '-') - 1) AS INTEGER), m.title LIMIT ?`, [...(options.sourceId ? [options.sourceId] : []), candidateLimit]) : []
+    const candidateRows = [...fallbackRows, ...ordinalRows]
+    const hits = candidateRows.map((row, index) => ({ materialId: String(row.materialId), chunkId: String(row.chunkId ?? `material:${row.materialId}`), title: String(row.title), text: String(row.text), score: 1 / (index + 1), sourcePath: row.sourcePath as string | null, pageNumber: row.pageNumber === null || row.pageNumber === undefined ? null : Number(row.pageNumber), heading: row.heading as string | null ?? null, availability: (row.availability as SearchHit['availability']) ?? 'available' }))
+    return rankKnowledgeHits(query, hits, limit, chapterQuestion)
   }
   search(query: string): Material[] { return this.query('SELECT m.*, mis.availability AS availability, mis.last_indexed_at AS lastIndexedAt FROM materials m LEFT JOIN material_index_state mis ON mis.material_id=m.id WHERE m.title LIKE ? OR m.extracted_text LIKE ? OR m.excerpt LIKE ? ORDER BY m.imported_at DESC', [`%${query}%`, `%${query}%`, `%${query}%`]).map(asMaterial) }
   getSettings(): ModelSettings { const settings = first<{ value: string }>(this.query('SELECT value FROM settings WHERE key=?', ['model'])); return settings ? JSON.parse(settings.value) : { profileId: null, provider: 'ollama', baseUrl: 'http://localhost:11434', chatModel: '', embeddingModel: '', allowCloud: false, enabled: false } }
