@@ -483,6 +483,7 @@ describe('WorkspaceService', () => {
     await imported.importPackage(packagePath, destination)
     expect(imported.summary()).toMatchObject({ root: destination, name: 'Research' })
     expect(imported.search('survives')).toHaveLength(1)
+    expect(existsSync(join(destination, 'workspace-manifest.json'))).toBe(true)
   })
 
   it('archives a topic without deleting its materials, styles, or positions', async () => {
@@ -690,6 +691,46 @@ describe('WorkspaceService', () => {
     service.undoTopicEditorCommand(topic.id)
     expect(service.topicMap(topic.id).workstreams).toHaveLength(0)
     expect(service.topicMap(topic.id).materials.every((material) => !material.workstreamId)).toBe(true)
+  })
+
+  it('applies current proposals atomically as one undoable history entry', async () => {
+    const service = makeService(); await service.create(makeRoot(), 'Knowledge')
+    const first = await service.createNote('First', 'Local first'); const second = await service.createNote('Second', 'Local second')
+    const topic = service.createTopic('Review'); service.addMaterialsToTopic(topic.id, [first.id, second.id])
+    const baseRevision = service.topicMap(topic.id).topic.revision
+    const proposals = service.createTopicProposals(topic.id, [
+      { kind: 'create_relation', reason: 'The order is explicit.', evidence: 'First then second.', materialId: null, relationId: null, payload: { sourceMaterialId: first.id, targetMaterialId: second.id, relationType: 'next', label: 'next' }, baseRevision, source: 'canvas-ai' },
+      { kind: 'create_workstream', reason: 'Both belong to one lane.', evidence: 'Same workflow.', materialId: null, relationId: null, payload: { name: 'Workflow', materialIds: [first.id, second.id] }, baseRevision, source: 'canvas-ai' }
+    ])
+    const before = service.topicHistoryStatus(topic.id).cursor
+    expect(service.acceptTopicProposals(topic.id, proposals.map((proposal) => proposal.id))).toHaveLength(2)
+    expect(service.topicHistoryStatus(topic.id).cursor).toBe(before + 1)
+    expect(service.topicMap(topic.id).relations).toHaveLength(1)
+    expect(service.topicMap(topic.id).workstreams).toHaveLength(1)
+    service.undoTopicEditorCommand(topic.id)
+    expect(service.topicMap(topic.id).relations).toHaveLength(0)
+    expect(service.topicMap(topic.id).workstreams).toHaveLength(0)
+  })
+
+  it('marks a proposal stale when the topic revision changes before review', async () => {
+    const service = makeService(); await service.create(makeRoot(), 'Knowledge')
+    const first = await service.createNote('First', 'Local first'); const second = await service.createNote('Second', 'Local second')
+    const topic = service.createTopic('Review'); service.addMaterialsToTopic(topic.id, [first.id, second.id])
+    const baseRevision = service.topicMap(topic.id).topic.revision
+    const proposal = service.createTopicProposals(topic.id, [{ kind: 'create_relation', reason: 'Reason', evidence: 'Evidence', materialId: null, relationId: null, payload: { sourceMaterialId: first.id, targetMaterialId: second.id, relationType: 'next', label: 'next' }, baseRevision, source: 'canvas-ai' }])[0]
+    service.positionMaterial(topic.id, first.id, 80, 90)
+    expect(service.listTopicProposals(topic.id)[0].stale).toBe(true)
+    expect(() => service.acceptTopicProposal(topic.id, proposal.id)).toThrow('stale')
+    expect(service.topicMap(topic.id).relations).toHaveLength(0)
+  })
+
+  it('persists map view preferences with legacy-safe defaults', async () => {
+    const service = makeService(); await service.create(makeRoot(), 'Knowledge')
+    const topic = service.createTopic('Review')
+    expect(topic.viewMode).toBe('map')
+    expect(topic.confirmedOnly).toBe(false)
+    const updated = service.updateTopicViewPreferences(topic.id, { viewMode: 'flow', confirmedOnly: true })
+    expect(updated).toMatchObject({ viewMode: 'flow', confirmedOnly: true })
   })
 
   it('requeues materials left running when a workspace is reopened', async () => {

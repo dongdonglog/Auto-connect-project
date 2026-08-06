@@ -2,6 +2,7 @@ import { Link2, Sparkles, Upload } from 'lucide-react'
 import { useEffect, useState, type MouseEvent } from 'react'
 import type { Material, Topic } from '../types'
 import { MaterialCard } from './MaterialCard'
+import { useI18n } from '../i18n'
 
 export interface WorkbenchProps {
   materials: Material[]
@@ -20,9 +21,10 @@ export function Workbench({ materials, materialTopics, topics, onSelect, onConte
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [topicFilter, setTopicFilter] = useState('')
   const [sort, setSort] = useState<'recent' | 'topic'>('recent')
+  const { t, locale } = useI18n()
   const pageSize = 15
   const filtered = materials.filter((material) => !topicFilter || materialTopics[material.id]?.some((topic) => topic.id === topicFilter))
-  const ordered = [...filtered].sort((a, b) => sort === 'recent' ? b.importedAt.localeCompare(a.importedAt) : (materialTopics[a.id]?.[0]?.name ?? '永未归类').localeCompare(materialTopics[b.id]?.[0]?.name ?? '永未归类', 'zh-CN'))
+  const ordered = [...filtered].sort((a, b) => sort === 'recent' ? b.importedAt.localeCompare(a.importedAt) : (materialTopics[a.id]?.[0]?.name ?? t('workbench.allTopics')).localeCompare(materialTopics[b.id]?.[0]?.name ?? t('workbench.allTopics'), locale))
   const pageCount = Math.max(1, Math.ceil(ordered.length / pageSize))
   const currentPage = Math.min(page, pageCount)
   const visible = ordered.slice((currentPage - 1) * pageSize, currentPage * pageSize)
@@ -36,12 +38,12 @@ export function Workbench({ materials, materialTopics, topics, onSelect, onConte
       <section className="workbench">
         <div className="empty-state">
           <div className="empty-icon"><Upload size={25}/></div>
-          <h2>从一份材料开始</h2>
-          <p>拖入文件、写一段笔记，或者添加链接。</p>
+          <h2>{t('workbench.start')}</h2>
+          <p>{t('workbench.startCopy')}</p>
           <div>
-            <button className="primary-button" onClick={onImport}><Upload size={17}/>导入文件</button>
-            <button className="secondary-button" onClick={onLink}><Link2 size={17}/>添加链接</button>
-            <button className="secondary-button" onClick={onDemo}><Sparkles size={17}/>创建学习路径演示</button>
+            <button className="primary-button" onClick={onImport}><Upload size={17}/>{t('workbench.importFile')}</button>
+            <button className="secondary-button" onClick={onLink}><Link2 size={17}/>{t('workbench.addLink')}</button>
+            <button className="secondary-button" onClick={onDemo}><Sparkles size={17}/>{t('workbench.demo')}</button>
           </div>
         </div>
       </section>
@@ -51,29 +53,29 @@ export function Workbench({ materials, materialTopics, topics, onSelect, onConte
     <section className="workbench">
       <div className="section-heading">
         <div>
-          <h2>最近导入</h2>
-          <p>材料完成分析后会自动补充摘要与关联。</p>
+          <h2>{t('workbench.recent')}</h2>
+          <p>{t('workbench.recentCopy')}</p>
         </div>
         <div className="workbench-actions">
-          <button className="secondary-button" onClick={onDemo}><Sparkles size={15}/>创建学习路径演示</button>
-          <span>{filtered.length} 份材料</span>
+          <button className="secondary-button" onClick={onDemo}><Sparkles size={15}/>{t('workbench.demo')}</button>
+          <span>{t('workbench.materialCount', { count: filtered.length })}</span>
         </div>
       </div>
       <div className="workbench-filters">
         <select value={topicFilter} onChange={(event) => setTopicFilter(event.target.value)}>
-          <option value="">全部主题</option>
+          <option value="">{t('workbench.allTopics')}</option>
           {topics.map((topic) => <option key={topic.id} value={topic.id}>{topic.name}</option>)}
         </select>
         <select value={sort} onChange={(event) => setSort(event.target.value as 'recent' | 'topic')}>
-          <option value="recent">最近导入</option>
-          <option value="topic">按主题</option>
+          <option value="recent">{t('workbench.sortRecent')}</option>
+          <option value="topic">{t('workbench.sortTopic')}</option>
         </select>
       </div>
       {selectedIds.length > 0 && (
         <div className="bulk-material-actions">
-          <span>已选择 {selectedIds.length} 份材料</span>
-          <button className="primary-button" onClick={() => onCreateTopic(selectedIds)}>从所选创建主题</button>
-          <button className="secondary-button" onClick={() => setSelectedIds([])}>取消选择</button>
+          <span>{t('workbench.selectedCount', { count: selectedIds.length })}</span>
+          <button className="primary-button" onClick={() => onCreateTopic(selectedIds)}>{t('workbench.createTopicFromSelected')}</button>
+          <button className="secondary-button" onClick={() => setSelectedIds([])}>{t('workbench.clearSelection')}</button>
         </div>
       )}
       <div className="material-grid">
@@ -90,9 +92,9 @@ export function Workbench({ materials, materialTopics, topics, onSelect, onConte
       </div>
       {pageCount > 1 && (
         <div className="workbench-pagination">
-          <button className="secondary-button" disabled={currentPage === 1} onClick={() => setPage((value) => value - 1)}>上一页</button>
-          <span>第 {currentPage} / {pageCount} 页</span>
-          <button className="secondary-button" disabled={currentPage === pageCount} onClick={() => setPage((value) => value + 1)}>下一页</button>
+          <button className="secondary-button" disabled={currentPage === 1} onClick={() => setPage((value) => value - 1)}>{t('workbench.previous')}</button>
+          <span>{t('workbench.page', { current: currentPage, total: pageCount })}</span>
+          <button className="secondary-button" disabled={currentPage === pageCount} onClick={() => setPage((value) => value + 1)}>{t('workbench.next')}</button>
         </div>
       )}
     </section>

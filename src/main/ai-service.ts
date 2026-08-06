@@ -1,4 +1,5 @@
-import type { AnalysisSummary, GroundedAnswer, KnowledgeChatTurn, KnowledgeQuestion, Material, MaterialAnalysisCard, ModelSettings, ProviderProfile, ProviderProfileInput, RelationAiExplanationFailureReason, RelationAiExplanationResult, SearchHit, TopicMap, TopicProposal, TopicRelationCandidate } from './types'
+import { randomUUID } from 'node:crypto'
+import type { AnalysisSummary, CanvasAiPlan, CanvasAiRequest, GroundedAnswer, KnowledgeChatTurn, KnowledgeQuestion, Material, MaterialAnalysisCard, ModelSettings, ProviderProfile, ProviderProfileInput, RelationAiExplanationFailureReason, RelationAiExplanationResult, SearchHit, TopicMap, TopicProposal, TopicRelationCandidate } from './types'
 import { WorkspaceService } from './workspace-service'
 import { AppStore } from './app-store'
 import connectionSkill from './ai-skills/topic-connection.md?raw'
@@ -6,6 +7,8 @@ import operationSkill from './ai-skills/topic-operation.md?raw'
 import { topicToolContext } from './topic-tools'
 import { chunkHash, tokenize } from './indexer'
 import { MaterialMapMcpServer } from './material-mcp'
+import { parseCanvasAiPlan } from './canvas-plan-validator'
+import { requiresCloudConsent } from '../shared/ai-provider'
 
 interface TopicAnalysisResult {
   workstreams?: Array<{ name: string; materialIds: string[] }>
@@ -176,7 +179,7 @@ export class AiService {
   async validate(settings: ModelSettings, topicId?: string): Promise<Array<{ id: string; ok: boolean; detail: string; status?: number; durationMs: number }>> {
     const profile = this.profileFor(settings)
     if (!settings.enabled || !settings.chatModel) return [{ id: 'configuration', ok: false, detail: 'Enable analysis and select a chat model before validation.', durationMs: 0 }]
-    if (settings.provider !== 'ollama' && !settings.allowCloud) return [{ id: 'configuration', ok: false, detail: 'Enable cloud consent before validation.', durationMs: 0 }]
+    if (this.needsCloudConsent(settings, profile) && !settings.allowCloud) return [{ id: 'configuration', ok: false, detail: 'Enable cloud consent before validation.', durationMs: 0 }]
     if (topicId) {
       const map = this.workspace.topicMap(topicId)
       if (map.materials.length < 2) return [{ id: 'configuration', ok: false, detail: 'The AI demonstration topic needs at least two materials.', durationMs: 0 }]
@@ -238,7 +241,7 @@ export class AiService {
     const settings = this.workspace.getSettings()
     if (!map.materials.length) throw new Error('Add materials to this topic before analysis.')
     if (!settings.enabled || !settings.chatModel) throw new Error('Enable analysis and select a chat model in workspace settings first.')
-    if (settings.provider !== 'ollama' && !settings.allowCloud) throw new Error('Cloud analysis requires explicit consent in settings.')
+    if (this.needsCloudConsent(settings) && !settings.allowCloud) throw new Error('Cloud analysis requires explicit consent in settings.')
     const jobs = map.materials.map((material) => ({ materialId: material.id, jobId: this.workspace.startJob(material.id, 'ai-analysis') }))
     try {
       const result = await this.requestTopic(settings, map)
@@ -343,7 +346,7 @@ export class AiService {
     if (!settings.enabled || !settings.profileId || !settings.chatModel) throw new Error('请先在“模型与隐私”中添加并启用 AI 配置后再提问。')
     const profile = this.appStore.getProfile(settings.profileId)
     if (!profile || (profile.provider !== 'ollama' && !profile.hasApiKey)) throw new Error('当前 AI 配置不完整，请在“模型与隐私”中重新配置。')
-    if (profile.provider !== 'ollama' && !settings.allowCloud) throw new Error('请先在“模型与隐私”中确认允许将材料发送到外部 AI 服务。')
+    if (this.needsCloudConsent(settings, profile) && !settings.allowCloud) throw new Error('请先在“模型与隐私”中确认允许将材料发送到外部 AI 服务。')
     const history: KnowledgeChatTurn[] = (typeof input === 'string' || !Array.isArray(input.history) ? [] : input.history)
       .filter((turn): turn is KnowledgeChatTurn => Boolean(turn) && (turn.role === 'user' || turn.role === 'assistant') && typeof turn.content === 'string')
       .slice(-8)
@@ -476,7 +479,7 @@ ${retrievalContext || '(none found; answer only from the catalog and summaries a
     if (!source || !target) throw new Error('Relationship material is unavailable.')
     const settings = this.workspace.getSettings()
     if (!settings.enabled || !settings.chatModel) return failure('not-configured', '请先在设置中启用 AI 并选择聊天模型。')
-    if (settings.provider !== 'ollama' && !settings.allowCloud) return failure('no-consent', '使用云端模型解释关系前，请在设置中明确同意云端处理。')
+    if (this.needsCloudConsent(settings) && !settings.allowCloud) return failure('no-consent', '使用云端模型解释关系前，请在设置中明确同意云端处理。')
     // Context window: at most 2 chunks per side, 500 characters each.
     const windows = (materialId: string) => this.workspace.materialEvidenceWindow(materialId, `${source.title} ${target.title}`, 1).slice(0, 2).map((chunk) => ({ heading: chunk.heading, text: chunk.text.slice(0, 500) }))
     const prompt = `Explain or reject exactly one locally discovered relationship. Use only the supplied evidence. Return ONLY JSON: {"supported":true,"sourceMaterialId":"${source.id}","targetMaterialId":"${target.id}","relationType":"references|depends_on|evidences|implements|tests|related","label":"short Chinese label","explanation":"one concise Chinese explanation","confidence":0.0}. Keep the supplied direction unless evidence clearly supports reversing it. Local evidence: ${JSON.stringify(relation.evidence.map((item) => item.text))}. Source: ${JSON.stringify({ id: source.id, title: source.title, excerpts: windows(source.id) })}. Target: ${JSON.stringify({ id: target.id, title: target.title, excerpts: windows(target.id) })}`
@@ -506,7 +509,7 @@ ${retrievalContext || '(none found; answer only from the catalog and summaries a
     const map = this.workspace.topicMap(topicId); const settings = this.workspace.getSettings()
     if (!map.materials.length) throw new Error('Add materials to this topic before analysis.')
     if (!settings.enabled || !settings.chatModel) throw new Error('Enable analysis and select a chat model in workspace settings first.')
-    if (settings.provider !== 'ollama' && !settings.allowCloud) throw new Error('Cloud analysis requires explicit consent in settings.')
+    if (this.needsCloudConsent(settings) && !settings.allowCloud) throw new Error('Cloud analysis requires explicit consent in settings.')
     const summary: AnalysisSummary = { topicId, processed: 0, addedWorkstreams: 0, addedRelations: 0, failures: [] }
     const run = this.workspace.startTopicAnalysisRun(topicId, map.topic.revision, map.materials.length); summary.runId = run.id
     const jobs = map.materials.map((material) => ({ materialId: material.id, jobId: this.workspace.startJob(material.id, 'ai-analysis') }))
@@ -537,7 +540,7 @@ ${retrievalContext || '(none found; answer only from the catalog and summaries a
 
   private async embed(texts: string[]): Promise<number[][] | null> {
     const settings = this.workspace.getSettings(); if (!settings.embeddingModel) return null
-    if (settings.provider !== 'ollama' && !settings.allowCloud) return null
+    if (this.needsCloudConsent(settings) && !settings.allowCloud) return null
     const profile = this.profileFor(settings); const base = profile.baseUrl.replace(/\/$/, ''); const headers = { 'Content-Type': 'application/json', ...this.headers(profile) }
     if (profile.provider === 'ollama') {
       const response = await fetch(`${base}/api/embed`, { method: 'POST', headers, body: JSON.stringify({ model: settings.embeddingModel, input: texts }) })
@@ -557,7 +560,7 @@ ${retrievalContext || '(none found; answer only from the catalog and summaries a
     if (!question.trim()) throw new Error('Describe the requested board change.')
     const settings = this.workspace.getSettings()
     if (!settings.enabled || !settings.chatModel) throw new Error('Enable a model before requesting board suggestions.')
-    if (settings.provider !== 'ollama' && !settings.allowCloud) throw new Error('Cloud analysis requires explicit consent in settings.')
+    if (this.needsCloudConsent(settings) && !settings.allowCloud) throw new Error('Cloud analysis requires explicit consent in settings.')
     const skill = this.readSkill('topic-operation.md')
     const context = topicToolContext(map)
     const prompt = `${skill}\nYou are calling the local topic tools. First inspect this context, then return ONLY JSON matching this schema: {"answer":"short answer","proposedActions":[{"id":"local-id","kind":"create_relation|create_workstream|delete_ai_relation|rename_relation|set_sequence|set_card_style|layout","reason":"why","evidence":"supporting text from context","materialId":"optional","relationId":"optional","payload":{}}]}. For a connection, payload MUST contain sourceMaterialId, targetMaterialId, label, relationType, confidence. Never return prose outside JSON.\nActive topic context: ${JSON.stringify(context)}\nUser request: ${question}`
@@ -576,6 +579,55 @@ ${retrievalContext || '(none found; answer only from the catalog and summaries a
     const validated = (result.proposedActions ?? []).filter((action) => this.validProposal(map, action)).slice(0, 8)
     const actions = this.workspace.createTopicProposals(topicId, validated.map((action) => ({ kind: action.kind, reason: action.reason, evidence: action.evidence, materialId: action.materialId ?? null, relationId: action.relationId ?? null, payload: action.payload ?? {} })))
     return { answer: result.answer?.trim() || '已根据当前主题生成可审阅的建议。', proposedActions: actions }
+  }
+
+  async planCanvas(input: CanvasAiRequest): Promise<CanvasAiPlan> {
+    const map = this.workspace.topicMap(input.topicId)
+    const baseRevision = Number(input.baseRevision)
+    if (!Number.isInteger(baseRevision) || baseRevision < 0 || baseRevision !== map.topic.revision) throw new Error('The topic changed. Refresh the canvas before asking AI for a plan.')
+    const selectedIds = [...new Set((input.selectedMaterialIds.length ? input.selectedMaterialIds : map.materials.map((material) => material.id)).map(String))]
+    if (!selectedIds.length || selectedIds.length > 200) throw new Error('Select between one and 200 materials for a canvas plan.')
+    const materialIds = new Set(map.materials.map((material) => material.id))
+    if (selectedIds.some((materialId) => !materialIds.has(materialId))) throw new Error('The selection contains a material outside this topic.')
+    if (!input.instruction.trim() || input.instruction.trim().length > 1200) throw new Error('Describe the board change in 1,200 characters or less.')
+    const settings = this.workspace.getSettings()
+    if (!settings.enabled || !settings.chatModel) throw new Error('Enable a model before requesting a canvas plan.')
+    const profile = this.profileFor(settings)
+    if (this.needsCloudConsent(settings, profile) && (!settings.allowCloud || !input.allowCloud)) throw new Error('Cloud analysis requires explicit consent in settings and this request. Enable the workspace consent and the request checkbox before generating a cloud plan.')
+    const runId = randomUUID()
+    const maxContextChars = Math.max(4000, Math.min(Number(input.maxContextChars ?? 24000), 50000))
+    let used = 0
+    const selected = map.materials.filter((material) => selectedIds.includes(material.id)).map((material) => {
+      const summary = String(material.extractedText || material.excerpt || '').replace(/\s+/gu, ' ').trim().slice(0, 1000)
+      const value = { id: material.id, title: material.title.slice(0, 160), summary }
+      used += JSON.stringify(value).length
+      return used <= maxContextChars ? value : { id: material.id, title: material.title.slice(0, 160), summary: '' }
+    })
+    const relationIds = new Set(map.relations.map((relation) => relation.id))
+    const context = { materials: selected, workstreams: map.workstreams.map((stream) => ({ id: stream.id, name: stream.name, materialIds: map.materials.filter((material) => material.workstreamId === stream.id).map((material) => material.id) })), relations: map.relations.slice(0, 120).map((relation) => ({ id: relation.id, sourceMaterialId: relation.sourceMaterialId, targetMaterialId: relation.targetMaterialId, label: relation.label, relationType: relation.relationType })) }
+    const prompt = `You are the canvas co-creator inside Material Map. Return ONLY JSON: {"summary":"short Chinese summary","actions":[{"id":"local-id","kind":"create_relation|create_workstream|rename_relation|set_sequence|set_card_style|layout","reason":"why","evidence":"supporting evidence from the supplied materials","materialId":null,"relationId":null,"payload":{}}],"warnings":[]}. Only propose changes supported by supplied material summaries. Never delete materials, write files, or invent IDs. For create_relation payload requires sourceMaterialId,targetMaterialId,label,relationType,confidence. For create_workstream payload requires name,materialIds. For layout payload requires positions:[{materialId,x,y}]. Current topic revision: ${baseRevision}. Current topic context: ${JSON.stringify(context)}. User instruction: ${input.instruction.trim()}`
+    const response = await this.chat(profile, settings.chatModel, prompt, true)
+    if (!response.ok) throw new Error(`Canvas plan request returned HTTP ${response.status}.`)
+    const validationContext = { topicId: input.topicId, baseRevision, materialIds, relationIds, provider: profile.provider, model: settings.chatModel, runId, maxActions: input.maxActions }
+    const raw = this.responseText(await this.responseJson(response, 'Canvas plan'))
+    let plan: CanvasAiPlan
+    try {
+      plan = parseCanvasAiPlan(raw, validationContext)
+    } catch (firstError) {
+      const repairPrompt = `The previous canvas plan was invalid. Return ONLY one valid JSON object matching this schema, with no markdown, prose, or code fences: {"summary":"short summary","actions":[{"id":"local-id","kind":"create_relation|create_workstream|rename_relation|set_sequence|set_card_style|layout","reason":"why","evidence":"supporting evidence","materialId":null,"relationId":null,"payload":{}}],"warnings":[]}. Use only the supplied material and relation IDs. Never delete materials or write files. Previous output: ${raw.slice(0, 2400)}`
+      const repair = await this.chat(profile, settings.chatModel, repairPrompt, true)
+      if (!repair.ok) throw new Error(`Canvas plan JSON was invalid and the repair request returned HTTP ${repair.status}.`)
+      try {
+        const repairedRaw = this.responseText(await this.responseJson(repair, 'Canvas plan repair'))
+        plan = parseCanvasAiPlan(repairedRaw, validationContext)
+      } catch (secondError) {
+        const detail = secondError instanceof Error ? secondError.message : firstError instanceof Error ? firstError.message : 'unknown validation error'
+        throw new Error(`Canvas AI returned an invalid plan. No changes were made. ${detail}`)
+      }
+    }
+    this.workspace.createTopicProposalRun({ id: runId, topicId: input.topicId, baseRevision, instruction: input.instruction.trim(), provider: profile.provider, model: settings.chatModel, summary: plan.summary, status: plan.actions.length ? 'complete' : 'partial' })
+    const proposals = this.workspace.createTopicProposals(input.topicId, plan.actions.map((action) => ({ kind: action.kind, reason: action.reason, evidence: action.evidence, materialId: action.materialId ?? null, relationId: action.relationId ?? null, payload: action.payload, runId, baseRevision, source: 'canvas-ai' as const })))
+    return { ...plan, actions: plan.actions.map((action, index) => ({ ...action, id: proposals[index]?.id ?? action.id })) }
   }
 
   private materialCards(map: TopicMap, modelId: string): MaterialAnalysisCard[] {
@@ -676,6 +728,7 @@ ${retrievalContext || '(none found; answer only from the catalog and summaries a
     if (settings.profileId) { const profile = this.appStore.getProfile(settings.profileId); if (profile) return profile }
     return { id: '', name: 'Local Ollama', provider: 'ollama', baseUrl: settings.baseUrl, wireApi: 'chat_completions', models: [], recommendedModel: null, updatedAt: '', hasApiKey: false }
   }
+  private needsCloudConsent(settings: ModelSettings, profile = this.profileFor(settings)): boolean { return requiresCloudConsent(profile.provider, profile.baseUrl || settings.baseUrl) }
   private headers(profile: ProviderProfile): Record<string, string> {
     const key = profile.id ? this.appStore.getApiKey(profile.id) : null
     if (profile.provider === 'ollama') return {}

@@ -2,7 +2,7 @@ import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, safeStorage, shel
 import { join } from 'node:path'
 import { WorkspaceService } from './workspace-service'
 import { AiService } from './ai-service'
-import type { KnowledgeQuestion, ModelSettings, ProviderProfileInput } from './types'
+import type { CanvasAiRequest, KnowledgeQuestion, ModelSettings, ProviderProfileInput, TopicViewMode } from './types'
 import { AppStore } from './app-store'
 import { MaterialMapMcpServer } from './material-mcp'
 import { resetLearningPathDemo } from './demo-service'
@@ -89,6 +89,12 @@ function registerIpc(): void {
   ipcMain.handle('topics:restore', (_event, topicId: string) => workspace.restoreTopic(assertId(topicId, '主题标识')))
   ipcMain.handle('topics:deleteArchived', (_event, topicId: string) => workspace.deleteArchivedTopic(assertId(topicId, '主题标识')))
   ipcMain.handle('topics:map', (_event, topicId: string) => workspace.topicMap(assertId(topicId, '主题标识')))
+  ipcMain.handle('topics:updateView', (_event, topicId: string, input: { viewMode?: TopicViewMode; confirmedOnly?: boolean }) => {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) throw new IpcValidationError('画板视图设置无效。')
+    const viewMode = input.viewMode === undefined ? undefined : assertEnum(input.viewMode, ['map', 'flow'] as const, '画板视图')
+    if (input.confirmedOnly !== undefined && typeof input.confirmedOnly !== 'boolean') throw new IpcValidationError('关系筛选设置无效。')
+    return workspace.updateTopicViewPreferences(assertId(topicId, '主题标识'), { viewMode, confirmedOnly: input.confirmedOnly })
+  })
   ipcMain.handle('topics:rebuildTopology', (_event, topicId: string) => workspace.rebuildSystemTopology(assertId(topicId, '主题标识')))
   ipcMain.handle('demo:create', () => resetLearningPathDemo(workspace))
   ipcMain.handle('workstreams:create', (_event, topicId: string, name: string) => workspace.createWorkstream(topicId, name))
@@ -110,6 +116,7 @@ function registerIpc(): void {
   ipcMain.handle('topics:history', (_event, topicId: string) => workspace.topicHistoryStatus(assertId(topicId, '主题标识')))
   ipcMain.handle('topics:proposals', (_event, topicId: string) => workspace.listTopicProposals(assertId(topicId, '主题标识')))
   ipcMain.handle('topics:acceptProposal', (_event, topicId: string, proposalId: string) => workspace.acceptTopicProposal(assertId(topicId, '主题标识'), assertId(proposalId, '提案标识')))
+  ipcMain.handle('topics:acceptProposals', (_event, topicId: string, proposalIds: string[]) => { if (!Array.isArray(proposalIds)) throw new IpcValidationError('提案列表无效。'); return workspace.acceptTopicProposals(assertId(topicId, '主题标识'), proposalIds.map((proposalId) => assertId(proposalId, '提案标识'))) })
   ipcMain.handle('topics:archiveProposal', (_event, topicId: string, proposalId: string) => workspace.archiveTopicProposal(assertId(topicId, '主题标识'), assertId(proposalId, '提案标识')))
   ipcMain.handle('relations:create', (_event, relation) => workspace.createRelation({ ...relation, sourceMaterialId: assertId(relation?.sourceMaterialId, '来源材料标识'), targetMaterialId: assertId(relation?.targetMaterialId, '目标材料标识'), label: assertString(relation?.label, '关系标签', 64) }))
   ipcMain.handle('relations:update', (_event, id: string, label: string) => workspace.updateRelation(id, label))
@@ -132,6 +139,11 @@ function registerIpc(): void {
   ipcMain.handle('workspace:recent', () => appStore.listRecent())
   ipcMain.handle('workspace:forgetRecent', (_event, root: string) => appStore.forgetWorkspace(root))
   ipcMain.handle('ai:ask', (_event, question: string | KnowledgeQuestion) => ai.ask(question))
+  ipcMain.handle('ai:planCanvas', (_event, input: CanvasAiRequest) => {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) throw new IpcValidationError('AI 画板请求无效。')
+    if (!Array.isArray(input.selectedMaterialIds) || input.selectedMaterialIds.length > 200) throw new IpcValidationError('画板材料选择无效。')
+    return ai.planCanvas({ topicId: assertId(input.topicId, '主题标识'), selectedMaterialIds: input.selectedMaterialIds.map((value) => assertId(value, '材料标识')), instruction: assertString(input.instruction, '整理指令', 1200), baseRevision: assertNumber(input.baseRevision, '主题版本'), allowCloud: input.allowCloud === true, maxActions: input.maxActions === undefined ? undefined : assertLimit(input.maxActions, 64), maxContextChars: input.maxContextChars === undefined ? undefined : assertLimit(input.maxContextChars, 50000) })
+  })
   ipcMain.handle('ai:tools:list', () => materialTools.listTools())
   ipcMain.handle('ai:tools:call', (_event, name: string, args: Record<string, unknown>) => materialTools.call(assertString(name, '工具名称', 80), args && typeof args === 'object' && !Array.isArray(args) ? args : {}))
   ipcMain.handle('ai:explainRelation', (_event, relationId: string) => ai.explainMaterialRelation(assertId(relationId, '关系标识')))

@@ -3,6 +3,7 @@ import type { TopicMap } from '../../types'
 
 export type MaterialNodeData = {
   material: TopicMap['materials'][number]
+  workstreamName?: string
   index: number
   connecting: boolean
   select(): void
@@ -27,6 +28,7 @@ export function MaterialNode({ data }: NodeProps): React.ReactElement {
     <b className="flow-node-number" style={{ backgroundColor: color }}>{index + 1}</b>
     {([['left', Position.Left], ['top', Position.Top], ['right', Position.Right], ['bottom', Position.Bottom]] as const).map(([side, position]) => <span key={side}><Handle id={`in-${side}`} type="target" position={position} isConnectable={connecting} /><Handle id={`out-${side}`} type="source" position={position} isConnectable={connecting} /></span>)}
     <small style={{ fontSize: metaFontSize }}>{material.occurredAt?.slice(0, 10) ?? '未标记日期'}</small>
+    <small className="flow-node-workstream" style={{ fontSize: metaFontSize }}>{nodeData.workstreamName ?? 'Unassigned'}</small>
     <strong style={{ fontSize: titleFontSize }}>{title}</strong>
     {!collapsed && <span style={{ color: material.cardTextColor ?? undefined, fontSize: bodyFontSize }}>{excerpt}</span>}
     {!collapsed && ((material.tags ?? []).length > 0 || (material.cardTags ?? []).length > 0) && <em className="flow-card-tags" style={{ fontSize: metaFontSize }}>{[...(material.tags ?? []).map((tag) => tag.tag), ...(material.cardTags ?? [])].slice(0, 3).join(' · ')}</em>}

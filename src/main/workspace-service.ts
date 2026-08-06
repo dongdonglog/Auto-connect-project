@@ -12,7 +12,7 @@ import { detectVectorCapability, type VectorCapability } from './db/vector-capab
 import { VectorStore } from './db/vector-store'
 import { NativeDatabase } from './db/native-database'
 import { stableTopicOrder, topologyPositions } from '../shared/topic-topology'
-import type { AnalysisStatus, Entity, EntityMention, EntityMentionSource, EntityType, FolderSource, Job, LineDash, Material, MaterialAnalysisCard, MaterialChunk, MaterialRelation, MaterialRelationStatus, MaterialTag, ModelSettings, Relation, RelationWaypoint, RelationshipEvidence, SearchHit, Topic, TopicAnalysisRun, TopicCandidateStatus, TopicEditorCommand, TopicHistoryStatus, TopicRelationCandidate, TopicRelationCandidateRecord, TopicMap, TopicProposal, WorkspaceSummary, Workstream } from './types'
+import type { AnalysisStatus, Entity, EntityMention, EntityMentionSource, EntityType, FolderSource, Job, LineDash, Material, MaterialAnalysisCard, MaterialChunk, MaterialRelation, MaterialRelationStatus, MaterialTag, ModelSettings, Relation, RelationWaypoint, RelationshipEvidence, SearchHit, Topic, TopicAnalysisRun, TopicCandidateStatus, TopicEditorCommand, TopicHistoryStatus, TopicRelationCandidate, TopicRelationCandidateRecord, TopicMap, TopicProposal, TopicProposalRun, TopicProposalRunStatus, TopicProposalSource, TopicViewMode, WorkspaceSummary, Workstream } from './types'
 
 type SqlRow = Record<string, unknown>
 interface WorkspaceConfig { id: string; name: string; encrypted: boolean; salt?: string }
@@ -111,7 +111,7 @@ function asMaterial(row: SqlRow): Material {
 }
 const topicPalette = ['#08776f', '#3568b8', '#a14569', '#b26a21', '#7654a6', '#3c7d66']
 function topicColor(id: string): string { return topicPalette[[...id].reduce((sum, char) => sum + char.charCodeAt(0), 0) % topicPalette.length] }
-function asTopic(row: SqlRow): Topic { return { ...row, id: String(row.id), name: String(row.name), description: row.description as string | null, createdAt: String(row.created_at), archivedAt: row.archived_at as string | null, color: String(row.color ?? topicColor(String(row.id))), revision: Number(row.revision ?? 0) } }
+function asTopic(row: SqlRow): Topic { return { ...row, id: String(row.id), name: String(row.name), description: row.description as string | null, createdAt: String(row.created_at), archivedAt: row.archived_at as string | null, color: String(row.color ?? topicColor(String(row.id))), revision: Number(row.revision ?? 0), viewMode: row.view_mode === 'flow' ? 'flow' : 'map', confirmedOnly: Boolean(row.confirmed_only) } }
 function asWorkstream(row: SqlRow): Workstream { return { ...row, id: String(row.id), topicId: String(row.topic_id), name: String(row.name), position: Number(row.position), source: row.source as Workstream['source'] } }
 function parseRoutePoints(value: unknown): RelationWaypoint[] {
   try {
@@ -246,7 +246,8 @@ export class WorkspaceService {
   private initializeSchema(): void {
     this.requireDb().exec(`
       CREATE TABLE IF NOT EXISTS materials (id TEXT PRIMARY KEY, type TEXT NOT NULL, title TEXT NOT NULL, mime_type TEXT, source_path TEXT, stored_path TEXT, url TEXT, site_name TEXT, excerpt TEXT, extracted_text TEXT, imported_at TEXT NOT NULL, occurred_at TEXT, occurred_at_source TEXT NOT NULL, status TEXT NOT NULL, error TEXT, hash TEXT);
-      CREATE TABLE IF NOT EXISTS topics (id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT, created_at TEXT NOT NULL, archived_at TEXT, color TEXT, revision INTEGER NOT NULL DEFAULT 0);
+      CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS topics (id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT, created_at TEXT NOT NULL, archived_at TEXT, color TEXT, revision INTEGER NOT NULL DEFAULT 0, view_mode TEXT NOT NULL DEFAULT 'map', confirmed_only INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS topic_materials (topic_id TEXT NOT NULL, material_id TEXT NOT NULL, workstream_id TEXT, canvas_x REAL, canvas_y REAL, position_source TEXT NOT NULL DEFAULT 'auto', card_color TEXT, card_tags TEXT, card_note TEXT, sequence INTEGER, sequence_source TEXT NOT NULL DEFAULT 'time', added_at TEXT, display_title TEXT, display_excerpt TEXT, card_width REAL, card_height REAL, card_text_color TEXT, card_font_size REAL, card_collapsed INTEGER NOT NULL DEFAULT 0, card_z_index INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(topic_id, material_id));
       CREATE TABLE IF NOT EXISTS workstreams (id TEXT PRIMARY KEY, topic_id TEXT NOT NULL, name TEXT NOT NULL, position INTEGER NOT NULL, source TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS relations (id TEXT PRIMARY KEY, source_material_id TEXT NOT NULL, target_material_id TEXT NOT NULL, label TEXT NOT NULL, relation_type TEXT NOT NULL, evidence_text TEXT, evidence_material_id TEXT, confidence REAL, created_by TEXT NOT NULL, created_at TEXT NOT NULL, topic_id TEXT);
@@ -258,7 +259,8 @@ export class WorkspaceService {
       CREATE TABLE IF NOT EXISTS folder_sources (id TEXT PRIMARY KEY, root_path TEXT NOT NULL UNIQUE, enabled INTEGER NOT NULL DEFAULT 1, include_patterns TEXT NOT NULL DEFAULT '[]', exclude_patterns TEXT NOT NULL DEFAULT '[]', watch_enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS material_index_state (material_id TEXT PRIMARY KEY, source_id TEXT, availability TEXT NOT NULL DEFAULT 'available', last_indexed_at TEXT, last_seen_at TEXT);
       CREATE TABLE IF NOT EXISTS material_chunks (id TEXT PRIMARY KEY, material_id TEXT NOT NULL, ordinal INTEGER NOT NULL, text TEXT NOT NULL, start_offset INTEGER NOT NULL, end_offset INTEGER NOT NULL, page_number INTEGER, heading TEXT, hash TEXT NOT NULL, indexed_at TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS topic_proposals (id TEXT PRIMARY KEY, topic_id TEXT NOT NULL, kind TEXT NOT NULL, reason TEXT NOT NULL, evidence TEXT NOT NULL, material_id TEXT, relation_id TEXT, payload TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS topic_proposal_runs (id TEXT PRIMARY KEY, topic_id TEXT NOT NULL, base_revision INTEGER NOT NULL, instruction TEXT NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL, summary TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS topic_proposals (id TEXT PRIMARY KEY, topic_id TEXT NOT NULL, kind TEXT NOT NULL, reason TEXT NOT NULL, evidence TEXT NOT NULL, material_id TEXT, relation_id TEXT, payload TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, run_id TEXT, base_revision INTEGER, source TEXT NOT NULL DEFAULT 'legacy');
       CREATE TABLE IF NOT EXISTS material_analysis_cards (material_id TEXT NOT NULL, content_hash TEXT NOT NULL, model_id TEXT NOT NULL, title TEXT NOT NULL, date TEXT, headings TEXT NOT NULL, keywords TEXT NOT NULL, evidence_chunk_ids TEXT NOT NULL, summary TEXT NOT NULL, generated_at TEXT NOT NULL, PRIMARY KEY(material_id, content_hash, model_id));
       CREATE TABLE IF NOT EXISTS topic_analysis_runs (id TEXT PRIMARY KEY, topic_id TEXT NOT NULL, topic_revision INTEGER NOT NULL, stage TEXT NOT NULL, completed INTEGER NOT NULL DEFAULT 0, total INTEGER NOT NULL DEFAULT 0, added_relations INTEGER NOT NULL DEFAULT 0, rejected_candidates INTEGER NOT NULL DEFAULT 0, error TEXT, summary TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS material_tags (material_id TEXT NOT NULL, tag TEXT NOT NULL, source TEXT NOT NULL, weight REAL NOT NULL, PRIMARY KEY(material_id, tag));
@@ -272,11 +274,15 @@ export class WorkspaceService {
       CREATE TABLE IF NOT EXISTS relationship_evidence (id TEXT PRIMARY KEY, relation_id TEXT NOT NULL, type TEXT NOT NULL, score REAL NOT NULL, source_material_id TEXT NOT NULL, target_material_id TEXT NOT NULL, source_entity_id TEXT, target_entity_id TEXT, source_offset INTEGER, target_offset INTEGER, text TEXT NOT NULL, created_at TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS relationship_evidence_relation_idx ON relationship_evidence(relation_id);
     `)
+    this.requireDb().run("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (1, 'baseline', ?)", [now()])
+    this.requireDb().run("INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (2, 'canvas-ai-proposals-and-view-preferences', ?)", [now()])
     try { this.requireDb().run('CREATE VIRTUAL TABLE IF NOT EXISTS material_chunks_fts USING fts5(chunk_id UNINDEXED, material_id UNINDEXED, title, text, heading)'); this.ftsEnabled = true } catch { this.ftsEnabled = false }
     const topicTableColumns = this.query('PRAGMA table_info(topics)').map((row) => String(row.name))
     if (!topicTableColumns.includes('archived_at')) this.requireDb().run('ALTER TABLE topics ADD COLUMN archived_at TEXT')
     if (!topicTableColumns.includes('color')) this.requireDb().run('ALTER TABLE topics ADD COLUMN color TEXT')
     if (!topicTableColumns.includes('revision')) this.requireDb().run('ALTER TABLE topics ADD COLUMN revision INTEGER NOT NULL DEFAULT 0')
+    if (!topicTableColumns.includes('view_mode')) this.requireDb().run("ALTER TABLE topics ADD COLUMN view_mode TEXT NOT NULL DEFAULT 'map'")
+    if (!topicTableColumns.includes('confirmed_only')) this.requireDb().run('ALTER TABLE topics ADD COLUMN confirmed_only INTEGER NOT NULL DEFAULT 0')
     for (const topic of this.query("SELECT id FROM topics WHERE color IS NULL OR color=''")) this.requireDb().run('UPDATE topics SET color=? WHERE id=?', [topicColor(String(topic.id)), String(topic.id)])
     const topicColumns = this.query('PRAGMA table_info(topic_materials)').map((row) => String(row.name))
     if (!topicColumns.includes('canvas_x')) this.requireDb().run('ALTER TABLE topic_materials ADD COLUMN canvas_x REAL')
@@ -297,6 +303,10 @@ export class WorkspaceService {
     if (!topicColumns.includes('card_collapsed')) this.requireDb().run('ALTER TABLE topic_materials ADD COLUMN card_collapsed INTEGER NOT NULL DEFAULT 0')
     if (!topicColumns.includes('card_z_index')) this.requireDb().run('ALTER TABLE topic_materials ADD COLUMN card_z_index INTEGER NOT NULL DEFAULT 0')
     this.requireDb().run('UPDATE topic_materials SET added_at=COALESCE(added_at, ?) WHERE added_at IS NULL', [now()])
+    const proposalColumns = this.query('PRAGMA table_info(topic_proposals)').map((row) => String(row.name))
+    if (!proposalColumns.includes('run_id')) this.requireDb().run('ALTER TABLE topic_proposals ADD COLUMN run_id TEXT')
+    if (!proposalColumns.includes('base_revision')) this.requireDb().run('ALTER TABLE topic_proposals ADD COLUMN base_revision INTEGER')
+    if (!proposalColumns.includes('source')) this.requireDb().run("ALTER TABLE topic_proposals ADD COLUMN source TEXT NOT NULL DEFAULT 'legacy'")
     const relationStyleColumns = this.query('PRAGMA table_info(topic_relation_styles)').map((row) => String(row.name))
     const relationColumns = this.query('PRAGMA table_info(relations)').map((row) => String(row.name))
     if (!relationColumns.includes('topic_id')) this.requireDb().run('ALTER TABLE relations ADD COLUMN topic_id TEXT')
@@ -501,7 +511,7 @@ export class WorkspaceService {
   }
   retry(materialId: string): void { void this.enqueueProcessing(materialId) }
   updateMaterialDate(id: string, occurredAt: string): void { this.run('UPDATE materials SET occurred_at=?, occurred_at_source=? WHERE id=?', [occurredAt, 'manual', id]) }
-  createTopic(name: string, description = ''): Topic { const topicId = id(); const topic = { id: topicId, name, description: description || null, createdAt: now(), archivedAt: null, color: topicColor(topicId), revision: 0 }; this.run('INSERT INTO topics (id, name, description, created_at, archived_at, color, revision) VALUES (?, ?, ?, ?, ?, ?, ?)', [topic.id, topic.name, topic.description, topic.createdAt, null, topic.color, topic.revision]); return topic }
+  createTopic(name: string, description = ''): Topic { const topicId = id(); const topic = { id: topicId, name, description: description || null, createdAt: now(), archivedAt: null, color: topicColor(topicId), revision: 0, viewMode: 'map' as const, confirmedOnly: false }; this.run('INSERT INTO topics (id, name, description, created_at, archived_at, color, revision, view_mode, confirmed_only) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', [topic.id, topic.name, topic.description, topic.createdAt, null, topic.color, topic.revision, topic.viewMode, 0]); return topic }
   listTopics(): Topic[] { return this.query('SELECT * FROM topics WHERE archived_at IS NULL ORDER BY created_at DESC').map(asTopic) }
   listArchivedTopics(): Topic[] { return this.query('SELECT * FROM topics WHERE archived_at IS NOT NULL ORDER BY archived_at DESC').map(asTopic) }
   archiveTopic(topicId: string): void { this.run('UPDATE topics SET archived_at=? WHERE id=? AND archived_at IS NULL', [now(), topicId]); this.persist() }
@@ -560,6 +570,18 @@ export class WorkspaceService {
   updateCardOrder(topicId: string, materialId: string, sequence: number): void { if (!Number.isInteger(sequence) || sequence < 1) throw new Error('Sequence must be a positive integer.'); this.run("UPDATE topic_materials SET sequence=?, sequence_source='manual' WHERE topic_id=? AND material_id=?", [sequence, topicId, materialId]); this.rebuildSystemTopology(topicId) }
   resetCardOrder(topicId: string): void { this.run("UPDATE topic_materials SET sequence=NULL, sequence_source='time' WHERE topic_id=?", [topicId]); this.rebuildSystemTopology(topicId) }
   removeFromTopic(topicId: string, materialId: string): void { this.run('DELETE FROM topic_materials WHERE topic_id=? AND material_id=?', [topicId, materialId]); this.rebuildSystemTopology(topicId) }
+  updateTopicViewPreferences(topicId: string, input: { viewMode?: TopicViewMode; confirmedOnly?: boolean }): Topic {
+    const current = first<SqlRow>(this.query('SELECT * FROM topics WHERE id=?', [topicId])); if (!current) throw new Error('Topic not found.')
+    const viewMode = input.viewMode === undefined ? (current.view_mode === 'flow' ? 'flow' : 'map') : input.viewMode
+    if (viewMode !== 'map' && viewMode !== 'flow') throw new Error('Unsupported topic view mode.')
+    const confirmedOnly = input.confirmedOnly === undefined ? Boolean(current.confirmed_only) : Boolean(input.confirmedOnly)
+    this.run('UPDATE topics SET view_mode=?, confirmed_only=? WHERE id=?', [viewMode, confirmedOnly ? 1 : 0, topicId])
+    return asTopic(first<SqlRow>(this.query('SELECT * FROM topics WHERE id=?', [topicId]))!)
+  }
+  topicRevision(topicId: string): number {
+    const row = this.query('SELECT revision FROM topics WHERE id=?', [topicId])[0]; if (!row) throw new Error('Topic not found.')
+    return Number(row.revision ?? 0)
+  }
   createWorkstream(topicId: string, name: string, source: 'ai' | 'manual' = 'manual'): Workstream { const position = this.query('SELECT COUNT(*) AS count FROM workstreams WHERE topic_id=?', [topicId])[0]?.count as number ?? 0; const stream = { id: id(), topicId, name, position: Number(position), source }; this.run('INSERT INTO workstreams VALUES (?, ?, ?, ?, ?)', [stream.id, stream.topicId, stream.name, stream.position, stream.source]); this.persist(); return stream }
   updateWorkstream(id: string, name: string): void { this.run('UPDATE workstreams SET name=? WHERE id=?', [name, id]) }
   deleteWorkstream(id: string): void {
@@ -670,6 +692,17 @@ export class WorkspaceService {
   }
   private applyTopicEditorCommand(topicId: string, command: TopicEditorCommand): { inverse: TopicEditorCommand; forward?: TopicEditorCommand } {
     const payload = this.commandRecord(command.payload)
+    if (command.kind === 'batch') {
+      const commands = payload.commands
+      if (!Array.isArray(commands) || !commands.length || commands.length > 64) throw new Error('Batch editor command is invalid.')
+      const forward: TopicEditorCommand[] = []; const inverse: TopicEditorCommand[] = []
+      for (const value of commands) {
+        const child = this.commandRecord(value) as TopicEditorCommand
+        const result = this.applyTopicEditorCommand(topicId, child)
+        forward.push(result.forward ?? child); inverse.unshift(result.inverse)
+      }
+      return { forward: { kind: 'batch', payload: { commands: forward } }, inverse: { kind: 'batch', payload: { commands: inverse } } }
+    }
     if (command.kind === 'moveCards') {
       const positions = payload.positions
       if (!Array.isArray(positions) || !positions.length || positions.length > 500) throw new Error('Card positions are invalid.')
@@ -832,17 +865,19 @@ export class WorkspaceService {
     }
     throw new Error(`Unsupported editor command: ${command.kind}`)
   }
-  executeTopicEditorCommand(topicId: string, command: TopicEditorCommand): void {
+  executeTopicEditorCommands(topicId: string, commands: TopicEditorCommand[]): void {
+    if (!commands.length || commands.length > 64) throw new Error('Editor command list is invalid.')
     this.withTransaction(() => {
       if (!this.query('SELECT id FROM topics WHERE id=?', [topicId])[0]) throw new Error('Topic not found.')
-      const result = this.applyTopicEditorCommand(topicId, command)
+      const result = this.applyTopicEditorCommand(topicId, { kind: 'batch', payload: { commands } })
       const state = this.topicHistoryStatus(topicId); const sequence = state.cursor + 1
       this.requireDb().run('DELETE FROM topic_editor_history WHERE topic_id=? AND sequence>?', [topicId, state.cursor])
-      this.requireDb().run('INSERT OR REPLACE INTO topic_editor_history (topic_id, sequence, command_json, inverse_json, created_at) VALUES (?, ?, ?, ?, ?)', [topicId, sequence, JSON.stringify(result.forward ?? command), JSON.stringify(result.inverse), now()])
+      this.requireDb().run('INSERT OR REPLACE INTO topic_editor_history (topic_id, sequence, command_json, inverse_json, created_at) VALUES (?, ?, ?, ?, ?)', [topicId, sequence, JSON.stringify(result.forward), JSON.stringify(result.inverse), now()])
       this.requireDb().run('INSERT OR REPLACE INTO topic_editor_history_state (topic_id, cursor) VALUES (?, ?)', [topicId, sequence])
       this.bumpTopicRevision(topicId)
     })
   }
+  executeTopicEditorCommand(topicId: string, command: TopicEditorCommand): void { this.executeTopicEditorCommands(topicId, [command]) }
   undoTopicEditorCommand(topicId: string): TopicHistoryStatus {
     return this.withTransaction(() => {
       const state = this.topicHistoryStatus(topicId); if (!state.undo) return state
@@ -1326,15 +1361,31 @@ export class WorkspaceService {
   listMaterialChunks(materialId: string): MaterialChunk[] { return this.query('SELECT * FROM material_chunks WHERE material_id=? ORDER BY ordinal', [materialId]).map((row) => ({ id: String(row.id), materialId: String(row.material_id), ordinal: Number(row.ordinal), text: String(row.text), startOffset: Number(row.start_offset), endOffset: Number(row.end_offset), pageNumber: row.page_number === null ? null : Number(row.page_number), heading: row.heading as string | null, hash: String(row.hash), indexedAt: String(row.indexed_at) })) }
 
   listTopicProposals(topicId: string, status: TopicProposal['status'] = 'pending'): TopicProposal[] {
+    const revision = this.topicRevision(topicId)
     return this.query('SELECT * FROM topic_proposals WHERE topic_id=? AND status=? ORDER BY created_at DESC', [topicId, status]).map((row) => {
       let payload: Record<string, unknown> = {}; try { payload = JSON.parse(String(row.payload ?? '{}')) } catch { /* tolerate malformed legacy payloads */ }
-      return { id: String(row.id), topicId: String(row.topic_id), kind: String(row.kind), reason: String(row.reason), evidence: String(row.evidence), materialId: row.material_id as string | null, relationId: row.relation_id as string | null, payload, status: row.status as TopicProposal['status'], createdAt: String(row.created_at), updatedAt: String(row.updated_at) }
+      const baseRevision = row.base_revision === null || row.base_revision === undefined ? null : Number(row.base_revision)
+      return { id: String(row.id), topicId: String(row.topic_id), kind: String(row.kind), reason: String(row.reason), evidence: String(row.evidence), materialId: row.material_id as string | null, relationId: row.relation_id as string | null, payload, status: row.status as TopicProposal['status'], createdAt: String(row.created_at), updatedAt: String(row.updated_at), runId: row.run_id as string | null, baseRevision, source: (row.source as TopicProposalSource) ?? 'legacy', stale: baseRevision !== null && baseRevision !== revision }
     })
+  }
+
+  createTopicProposalRun(input: Omit<TopicProposalRun, 'createdAt' | 'updatedAt'>): TopicProposalRun {
+    const created = now(); const run = { ...input, createdAt: created, updatedAt: created }
+    this.run('INSERT INTO topic_proposal_runs (id, topic_id, base_revision, instruction, provider, model, summary, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [run.id, run.topicId, run.baseRevision, run.instruction, run.provider, run.model, run.summary, run.status, run.createdAt, run.updatedAt])
+    return run
+  }
+  topicProposalRun(runId: string): TopicProposalRun | null {
+    const row = first<SqlRow>(this.query('SELECT * FROM topic_proposal_runs WHERE id=?', [runId])); if (!row) return null
+    return { id: String(row.id), topicId: String(row.topic_id), baseRevision: Number(row.base_revision), instruction: String(row.instruction), provider: String(row.provider), model: String(row.model), summary: String(row.summary), status: row.status as TopicProposalRunStatus, createdAt: String(row.created_at), updatedAt: String(row.updated_at) }
+  }
+  updateTopicProposalRun(runId: string, status: TopicProposalRunStatus, summary?: string): TopicProposalRun | null {
+    this.run('UPDATE topic_proposal_runs SET status=?, summary=COALESCE(?, summary), updated_at=? WHERE id=?', [status, summary ?? null, now(), runId])
+    return this.topicProposalRun(runId)
   }
 
   createTopicProposals(topicId: string, proposals: Array<Omit<TopicProposal, 'id' | 'topicId' | 'status' | 'createdAt' | 'updatedAt'>>): TopicProposal[] {
     const created = now()
-    for (const proposal of proposals) this.run('INSERT INTO topic_proposals (id, topic_id, kind, reason, evidence, material_id, relation_id, payload, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [id(), topicId, proposal.kind, proposal.reason, proposal.evidence, proposal.materialId ?? null, proposal.relationId ?? null, JSON.stringify(proposal.payload ?? {}), 'pending', created, created])
+    for (const proposal of proposals) this.run('INSERT INTO topic_proposals (id, topic_id, kind, reason, evidence, material_id, relation_id, payload, status, created_at, updated_at, run_id, base_revision, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [id(), topicId, proposal.kind, proposal.reason, proposal.evidence, proposal.materialId ?? null, proposal.relationId ?? null, JSON.stringify(proposal.payload ?? {}), 'pending', created, created, proposal.runId ?? null, proposal.baseRevision ?? null, proposal.source ?? 'legacy'])
     return this.listTopicProposals(topicId)
   }
 
@@ -1344,32 +1395,49 @@ export class WorkspaceService {
     return this.listTopicProposals(String(row.topic_id), status).find((proposal) => proposal.id === proposalId) ?? null
   }
 
+  private proposalCommand(proposal: TopicProposal): TopicEditorCommand {
+    const payload = proposal.payload
+    if (proposal.kind === 'create_relation') return { kind: 'createRelation', payload: { relation: { sourceMaterialId: payload.sourceMaterialId, targetMaterialId: payload.targetMaterialId, label: payload.label, relationType: payload.relationType ?? 'related', confidence: payload.confidence ?? null, evidenceMaterialId: null } } }
+    if (proposal.kind === 'rename_relation') return { kind: 'renameRelation', payload: { relationId: proposal.relationId ?? payload.relationId, label: payload.label } }
+    if (proposal.kind === 'set_sequence') return { kind: 'setSequence', payload: { materialId: proposal.materialId ?? payload.materialId, sequence: payload.sequence } }
+    if (proposal.kind === 'set_card_style') { const materialId = proposal.materialId ?? payload.materialId; const { materialId: _materialId, ...patch } = payload; return { kind: 'patchCard', payload: { materialId, patch } } }
+    if (proposal.kind === 'layout') return { kind: 'moveCards', payload: { positions: payload.positions } }
+    if (proposal.kind === 'create_workstream') return { kind: 'createWorkstream', payload: { name: payload.name, materialIds: payload.materialIds } }
+    throw new Error('This proposal type is not supported by the board editor yet.')
+  }
+  private ensureProposalCurrent(topicId: string, proposal: TopicProposal): void {
+    if (proposal.baseRevision !== null && proposal.baseRevision !== undefined && proposal.baseRevision !== this.topicRevision(topicId)) throw new Error('This proposal is stale because the topic changed. Generate it again before applying.')
+  }
+  private refreshProposalRunStatus(runId: string): void {
+    const pending = Number(this.query("SELECT COUNT(*) AS count FROM topic_proposals WHERE run_id=? AND status='pending'", [runId])[0]?.count ?? 0)
+    this.updateTopicProposalRun(runId, pending ? 'partial' : 'applied')
+  }
   acceptTopicProposal(topicId: string, proposalId: string): TopicProposal {
     return this.withTransaction(() => {
       const proposal = this.listTopicProposals(topicId).find((item) => item.id === proposalId)
       if (!proposal) throw new Error('Pending proposal not found.')
-      const payload = proposal.payload
-      let command: TopicEditorCommand
-      if (proposal.kind === 'create_relation') {
-        command = { kind: 'createRelation', payload: { relation: { sourceMaterialId: payload.sourceMaterialId, targetMaterialId: payload.targetMaterialId, label: payload.label, relationType: payload.relationType ?? 'related', confidence: payload.confidence ?? null, evidenceMaterialId: null } } }
-      } else if (proposal.kind === 'rename_relation') {
-        command = { kind: 'renameRelation', payload: { relationId: proposal.relationId ?? payload.relationId, label: payload.label } }
-      } else if (proposal.kind === 'set_sequence') {
-        command = { kind: 'setSequence', payload: { materialId: proposal.materialId ?? payload.materialId, sequence: payload.sequence } }
-      } else if (proposal.kind === 'set_card_style') {
-        const materialId = proposal.materialId ?? payload.materialId
-        const { materialId: _materialId, ...patch } = payload
-        command = { kind: 'patchCard', payload: { materialId, patch } }
-      } else if (proposal.kind === 'layout') {
-        command = { kind: 'moveCards', payload: { positions: payload.positions } }
-      } else if (proposal.kind === 'create_workstream') {
-        command = { kind: 'createWorkstream', payload: { name: payload.name, materialIds: payload.materialIds } }
-      } else {
-        throw new Error('This proposal type is not supported by the board editor yet.')
-      }
-      this.executeTopicEditorCommand(topicId, command)
+      this.ensureProposalCurrent(topicId, proposal)
+      this.executeTopicEditorCommand(topicId, this.proposalCommand(proposal))
       const accepted = this.updateTopicProposalStatus(proposalId, 'accepted')
       if (!accepted) throw new Error('Proposal could not be accepted.')
+      if (proposal.runId) this.refreshProposalRunStatus(proposal.runId)
+      return accepted
+    })
+  }
+  acceptTopicProposals(topicId: string, proposalIds: string[]): TopicProposal[] {
+    const ids = [...new Set(proposalIds)]
+    if (!ids.length || ids.length > 64) throw new Error('Proposal list is invalid.')
+    return this.withTransaction(() => {
+      const proposals = ids.map((proposalId) => {
+        const proposal = this.listTopicProposals(topicId).find((item) => item.id === proposalId)
+        if (!proposal) throw new Error('Pending proposal not found.')
+        this.ensureProposalCurrent(topicId, proposal)
+        return proposal
+      })
+      this.executeTopicEditorCommands(topicId, proposals.map((proposal) => this.proposalCommand(proposal)))
+      const accepted = proposals.map((proposal) => this.updateTopicProposalStatus(proposal.id, 'accepted')).filter((proposal): proposal is TopicProposal => Boolean(proposal))
+      for (const runId of [...new Set(proposals.map((proposal) => proposal.runId).filter((value): value is string => Boolean(value)))]) this.refreshProposalRunStatus(runId)
+      if (accepted.length !== proposals.length) throw new Error('Some proposals could not be accepted.')
       return accepted
     })
   }
@@ -1407,7 +1475,35 @@ export class WorkspaceService {
   search(query: string): Material[] { return this.query('SELECT m.*, mis.availability AS availability, mis.last_indexed_at AS lastIndexedAt FROM materials m LEFT JOIN material_index_state mis ON mis.material_id=m.id WHERE m.title LIKE ? OR m.extracted_text LIKE ? OR m.excerpt LIKE ? ORDER BY m.imported_at DESC', [`%${query}%`, `%${query}%`, `%${query}%`]).map(asMaterial) }
   getSettings(): ModelSettings { const settings = first<{ value: string }>(this.query('SELECT value FROM settings WHERE key=?', ['model'])); return settings ? JSON.parse(settings.value) : { profileId: null, provider: 'ollama', baseUrl: 'http://localhost:11434', chatModel: '', embeddingModel: '', allowCloud: false, enabled: false } }
   saveSettings(settings: ModelSettings): void { this.run('INSERT OR REPLACE INTO settings VALUES (?, ?)', ['model', JSON.stringify(settings)]) }
-  async exportPackage(destination: string): Promise<void> { await new Promise<void>((resolve, reject) => { const stream = createWriteStream(destination); const archive = new ZipArchive({ zlib: { level: 8 } }); stream.on('close', resolve); stream.on('error', reject); archive.on('error', reject); archive.pipe(stream); archive.directory(this.root, false); void archive.finalize() }) }
+  private packageManifest(): { schemaVersion: number; workspaceId: string; generatedAt: string; files: Array<{ path: string; size: number; sha256: string }>; counts: { materials: number; relations: number; topics: number; proposals: number; history: number } } {
+    const files = ['workspace.json', this.config?.encrypted ? 'workspace.sqlite.enc' : 'workspace.sqlite', 'vectors.sqlite'].flatMap((relativePath) => {
+      const filePath = join(this.root, relativePath)
+      if (!existsSync(filePath)) return []
+      const content = readFileSync(filePath)
+      return [{ path: relativePath, size: content.byteLength, sha256: createHash('sha256').update(content).digest('hex') }]
+    })
+    const count = (table: string): number => Number((first<SqlRow>(this.query(`SELECT COUNT(*) AS count FROM ${table}`))?.count ?? 0))
+    return { schemaVersion: 2, workspaceId: this.config?.id ?? '', generatedAt: now(), files, counts: { materials: count('materials'), relations: count('relations'), topics: count('topics'), proposals: count('topic_proposals'), history: count('topic_editor_history') } }
+  }
+  private verifyPackageManifest(root: string): void {
+    const manifestPath = join(root, 'workspace-manifest.json')
+    if (!existsSync(manifestPath)) return
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as { schemaVersion?: number; files?: Array<{ path?: string; size?: number; sha256?: string }> }
+    if (manifest.schemaVersion !== undefined && (!Number.isInteger(manifest.schemaVersion) || manifest.schemaVersion > 2)) throw new Error('Workspace package schema is newer than this application.')
+    for (const entry of manifest.files ?? []) {
+      if (typeof entry.path !== 'string' || !entry.path || entry.path.includes('..') || typeof entry.sha256 !== 'string') throw new Error('Workspace package manifest is invalid.')
+      const filePath = join(root, entry.path)
+      if (!existsSync(filePath)) throw new Error(`Workspace package is incomplete: ${entry.path}`)
+      const content = readFileSync(filePath)
+      if (entry.size !== undefined && content.byteLength !== entry.size) throw new Error(`Workspace package checksum size mismatch: ${entry.path}`)
+      if (createHash('sha256').update(content).digest('hex') !== entry.sha256) throw new Error(`Workspace package checksum mismatch: ${entry.path}`)
+    }
+  }
+  async exportPackage(destination: string): Promise<void> {
+    const manifest = this.packageManifest()
+    writeFileSync(join(this.root, 'workspace-manifest.json'), JSON.stringify(manifest, null, 2))
+    await new Promise<void>((resolve, reject) => { const stream = createWriteStream(destination); const archive = new ZipArchive({ zlib: { level: 8 } }); stream.on('close', resolve); stream.on('error', reject); archive.on('error', reject); archive.pipe(stream); archive.directory(this.root, false, (entry) => basename(entry.name).startsWith('.workspace-') ? false : entry); void archive.finalize() })
+  }
   async inspectPackage(packagePath: string): Promise<{ name: string; encrypted: boolean }> {
     const archive = await unzipper.Open.file(packagePath)
     const config = archive.files.find((file) => file.path === 'workspace.json')
@@ -1415,5 +1511,5 @@ export class WorkspaceService {
     const parsed = JSON.parse((await config.buffer()).toString('utf8')) as WorkspaceConfig
     return { name: String(parsed.name ?? '未命名工作区'), encrypted: Boolean(parsed.encrypted) }
   }
-  async importPackage(packagePath: string, destination: string, password?: string): Promise<WorkspaceSummary> { mkdirSync(destination, { recursive: true }); await (await unzipper.Open.file(packagePath)).extract({ path: destination }); return this.open(destination, password) }
+  async importPackage(packagePath: string, destination: string, password?: string): Promise<WorkspaceSummary> { mkdirSync(destination, { recursive: true }); await (await unzipper.Open.file(packagePath)).extract({ path: destination }); this.verifyPackageManifest(destination); return this.open(destination, password) }
 }

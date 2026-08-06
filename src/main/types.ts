@@ -115,9 +115,17 @@ export interface KnowledgeQuestion {
 export interface SearchOptions { limit?: number; sourceId?: string }
 export interface AnswerOptions extends SearchOptions { allowCloud?: boolean }
 export type ProposalStatus = 'pending' | 'accepted' | 'archived'
-export interface TopicProposal { id: string; topicId: string; kind: string; reason: string; evidence: string; materialId: string | null; relationId: string | null; payload: Record<string, unknown>; status: ProposalStatus; createdAt: string; updatedAt: string }
+export type TopicViewMode = 'map' | 'flow'
+export type CanvasActionKind = 'create_relation' | 'create_workstream' | 'rename_relation' | 'set_sequence' | 'set_card_style' | 'layout'
+export interface CanvasAiRequest { topicId: string; selectedMaterialIds: string[]; instruction: string; baseRevision: number; allowCloud: boolean; maxActions?: number; maxContextChars?: number }
+export interface CanvasAction { id: string; kind: CanvasActionKind; reason: string; evidence: string; materialId?: string | null; relationId?: string | null; payload: Record<string, unknown> }
+export interface CanvasAiPlan { runId: string; topicId: string; baseRevision: number; summary: string; actions: CanvasAction[]; warnings: string[]; model: { provider: string; model: string } }
+export type TopicProposalSource = 'legacy' | 'canvas-ai' | 'chat'
+export type TopicProposalRunStatus = 'pending' | 'complete' | 'partial' | 'failed' | 'applied'
+export interface TopicProposalRun { id: string; topicId: string; baseRevision: number; instruction: string; provider: string; model: string; summary: string; status: TopicProposalRunStatus; createdAt: string; updatedAt: string }
+export interface TopicProposal { id: string; topicId: string; kind: string; reason: string; evidence: string; materialId: string | null; relationId: string | null; payload: Record<string, unknown>; status: ProposalStatus; createdAt: string; updatedAt: string; runId?: string | null; baseRevision?: number | null; source?: TopicProposalSource; stale?: boolean }
 
-export interface Topic { id: string; name: string; description: string | null; createdAt: string; archivedAt: string | null; color: string; revision: number }
+export interface Topic { id: string; name: string; description: string | null; createdAt: string; archivedAt: string | null; color: string; revision: number; viewMode: TopicViewMode; confirmedOnly: boolean }
 export interface Workstream { id: string; topicId: string; name: string; position: number; source: 'ai' | 'manual' }
 export type RelationWaypoint = { x: number; y: number }
 export type LineDash = 'auto' | 'solid' | 'dashed' | 'dotted'

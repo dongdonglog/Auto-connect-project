@@ -11,6 +11,56 @@ const service = (wireApi: ProviderProfile['wireApi']) => new AiService({} as Wor
 afterEach(() => vi.unstubAllGlobals())
 
 describe('AiService protocol requests', () => {
+  it('repairs a non-JSON canvas response before creating proposals', async () => {
+    const workspace = {
+      topicMap: vi.fn().mockReturnValue({
+        topic: { id: 'topic-1', revision: 2 },
+        materials: [{ id: 'm1', title: 'First', excerpt: 'First material', extractedText: null }, { id: 'm2', title: 'Second', excerpt: 'Second material', extractedText: null }],
+        workstreams: [],
+        relations: []
+      }),
+      getSettings: vi.fn().mockReturnValue(settings('profile')),
+      createTopicProposalRun: vi.fn(),
+      createTopicProposals: vi.fn().mockReturnValue([{ id: 'proposal-1' }])
+    }
+    const validPlan = JSON.stringify({ summary: 'Connect the two materials.', actions: [{ id: 'local-1', kind: 'create_relation', reason: 'The materials are sequential.', evidence: 'The supplied summaries describe an ordered handoff.', payload: { sourceMaterialId: 'm1', targetMaterialId: 'm2', label: 'next', relationType: 'next', confidence: .8 } }], warnings: [] })
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ choices: [{ message: { content: 'I cannot produce that plan.' } }] }), { headers: { 'content-type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ choices: [{ message: { content: validPlan } }] }), { headers: { 'content-type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    const ai = new AiService(workspace as unknown as WorkspaceService, { getProfile: () => profile('chat_completions'), getApiKey: () => 'test-key' } as unknown as AppStore)
+    const plan = await ai.planCanvas({ topicId: 'topic-1', selectedMaterialIds: ['m1', 'm2'], instruction: 'Connect the materials.', baseRevision: 2, allowCloud: true })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(plan.actions[0].id).toBe('proposal-1')
+    expect(workspace.createTopicProposalRun).toHaveBeenCalledOnce()
+    expect(workspace.createTopicProposals).toHaveBeenCalledOnce()
+  })
+
+  it('allows a local OpenAI-compatible endpoint without cloud consent', async () => {
+    const workspace = {
+      topicMap: vi.fn().mockReturnValue({ topic: { id: 'topic-local', revision: 1 }, materials: [{ id: 'm1', title: 'First', excerpt: 'First', extractedText: null }], workstreams: [], relations: [] }),
+      getSettings: vi.fn().mockReturnValue({ ...settings('profile'), baseUrl: 'http://127.0.0.1:1234/v1', allowCloud: false }),
+      createTopicProposalRun: vi.fn(),
+      createTopicProposals: vi.fn().mockReturnValue([])
+    }
+    const localProfile: ProviderProfile = { ...profile('chat_completions'), baseUrl: 'http://127.0.0.1:1234/v1' }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ summary: 'No changes', actions: [], warnings: [] }) } }] }), { headers: { 'content-type': 'application/json' } })))
+    const ai = new AiService(workspace as unknown as WorkspaceService, { getProfile: () => localProfile, getApiKey: () => 'local-key' } as unknown as AppStore)
+    await expect(ai.planCanvas({ topicId: 'topic-local', selectedMaterialIds: ['m1'], instruction: 'Review this material.', baseRevision: 1, allowCloud: false })).resolves.toMatchObject({ actions: [] })
+  })
+
+  it('keeps the two explicit consent checks for cloud canvas plans', async () => {
+    const workspace = {
+      topicMap: vi.fn().mockReturnValue({ topic: { id: 'topic-cloud', revision: 1 }, materials: [{ id: 'm1', title: 'First', excerpt: 'First', extractedText: null }], workstreams: [], relations: [] }),
+      getSettings: vi.fn().mockReturnValue(settings('profile'))
+    }
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const ai = new AiService(workspace as unknown as WorkspaceService, { getProfile: () => profile('chat_completions'), getApiKey: () => 'test-key' } as unknown as AppStore)
+    await expect(ai.planCanvas({ topicId: 'topic-cloud', selectedMaterialIds: ['m1'], instruction: 'Review this material.', baseRevision: 1, allowCloud: false })).rejects.toThrow(/workspace consent and the request checkbox/i)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
   it('calls the model with workspace context when arbitrary wording has no retrieval hits', async () => {
     const workspace = {
       searchKnowledgeAsync: vi.fn().mockResolvedValue({ hits: [], mode: 'fts' }),

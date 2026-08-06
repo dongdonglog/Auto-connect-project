@@ -14,8 +14,14 @@ export type MaterialRelationStatus = 'visible'|'hidden'|'fixed'
 export interface MaterialRelation { id:string; sourceMaterialId:string; targetMaterialId:string; score:number; relationType:'references'|'shares_entities'|'nearby'; status:MaterialRelationStatus; updatedAt:string; target:Material; evidence:RelationshipEvidence[] }
 export interface RelationAiExplanation { supported:boolean; sourceMaterialId:string; targetMaterialId:string; relationType:string; label:string; explanation:string; confidence:number }
 export interface TopicRelationCandidateRecord { id:string; topicId:string; sourceMaterialId:string; targetMaterialId:string; sharedTags:string[]; score:number; status:'visible'|'hidden'|'accepted'; createdAt:string; updatedAt:string }
-export interface TopicProposal { id:string; topicId:string; kind:string; reason:string; evidence:string; materialId?:string|null; relationId?:string|null; payload:Record<string, unknown>; status:'pending'|'accepted'|'archived'; createdAt:string; updatedAt:string }
-export interface Topic { id:string; name:string; description?:string|null; createdAt:string; archivedAt?:string|null; color?:string }
+export type TopicViewMode = 'map' | 'flow'
+export type CanvasActionKind = 'create_relation' | 'create_workstream' | 'rename_relation' | 'set_sequence' | 'set_card_style' | 'layout'
+export interface CanvasAiRequest { topicId:string; selectedMaterialIds:string[]; instruction:string; baseRevision:number; allowCloud:boolean; maxActions?:number; maxContextChars?:number }
+export interface CanvasAction { id:string; kind:CanvasActionKind; reason:string; evidence:string; materialId?:string|null; relationId?:string|null; payload:Record<string, unknown> }
+export interface CanvasAiPlan { runId:string; topicId:string; baseRevision:number; summary:string; actions:CanvasAction[]; warnings:string[]; model:{provider:string;model:string} }
+export interface TopicProposalRun { id:string; topicId:string; baseRevision:number; instruction:string; provider:string; model:string; summary:string; status:'pending'|'complete'|'partial'|'failed'|'applied'; createdAt:string; updatedAt:string }
+export interface TopicProposal { id:string; topicId:string; kind:string; reason:string; evidence:string; materialId?:string|null; relationId?:string|null; payload:Record<string, unknown>; status:'pending'|'accepted'|'archived'; createdAt:string; updatedAt:string; runId?:string|null; baseRevision?:number|null; source?:'legacy'|'canvas-ai'|'chat'; stale?:boolean }
+export interface Topic { id:string; name:string; description?:string|null; createdAt:string; archivedAt?:string|null; color?:string; revision:number; viewMode:TopicViewMode; confirmedOnly:boolean }
 export interface Workstream { id:string; topicId:string; name:string; position:number; source:string }
 export type ArrowStyle = 'none' | 'triangle' | 'open-triangle' | 'diamond'
 export type RelationWaypoint = { x:number; y:number }

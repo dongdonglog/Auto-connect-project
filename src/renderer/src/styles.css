@@ -569,6 +569,7 @@ nav { display: flex; flex-direction: column; gap: 2px; }
    Welcome screen
    ============================================================ */
 .welcome {
+  position: relative;
   min-height: 100vh;
   background:
     radial-gradient(1200px 500px at 50% -10%, rgba(13, 148, 136, 0.06), transparent 60%),
@@ -580,6 +581,9 @@ nav { display: flex; flex-direction: column; gap: 2px; }
   text-align: center;
   padding: 30px;
 }
+.welcome-language { position: absolute; top: 24px; right: 28px; }
+.welcome-language label { display: flex; align-items: center; gap: 8px; color: var(--color-text-secondary); font-size: 12px; }
+.welcome-language select { min-width: 92px; padding: 6px 8px; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-surface); color: var(--color-text); font: inherit; }
 .welcome-mark { width: 64px; height: 64px; margin-bottom: 26px; border-radius: 18px; box-shadow: 0 8px 24px rgba(13, 148, 136, 0.3); }
 .eyebrow { font-size: 11px; letter-spacing: 2.2px; color: var(--color-primary); font-weight: 700; margin: 0; }
 .welcome h1 { font-size: 36px; font-weight: 750; letter-spacing: -0.025em; color: var(--color-text); margin: 14px 0; }

@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { MaterialPreview } from '../MaterialPreview'
 import type { EvidenceFocus } from '../lib/evidence-focus'
 import type { Material, MaterialRelation, RelationAiExplanation, Topic } from '../types'
+import { useI18n } from '../i18n'
 import './explorer.css'
 
 export interface ExplorerProps {
@@ -13,9 +14,8 @@ export interface ExplorerProps {
   onChanged(): Promise<void>
 }
 
-const relationName: Record<MaterialRelation['relationType'], string> = { references: '显式引用', shares_entities: '共享实体', nearby: '结构邻近' }
-
 export function Explorer({ materials, topics, initialMaterialId, onSelect, onChanged }: ExplorerProps): React.ReactElement {
+  const { t, locale } = useI18n()
   const [selectedId, setSelectedId] = useState<string | null>(initialMaterialId ?? materials[0]?.id ?? null)
   const [relations, setRelations] = useState<MaterialRelation[]>([])
   const [loading, setLoading] = useState(false)
@@ -79,16 +79,17 @@ export function Explorer({ materials, topics, initialMaterialId, onSelect, onCha
     const focus = { key: `${item.id}:${materialId}`, materialId, startOffset: source ? item.sourceOffset : item.targetOffset, endOffset: source ? item.sourceEndOffset ?? null : item.targetEndOffset ?? null, pageNumber: source ? item.sourcePageNumber ?? null : item.targetPageNumber ?? null, heading: source ? item.sourceHeading ?? null : item.targetHeading ?? null }
     return focus.startOffset != null || focus.pageNumber != null || focus.heading != null ? focus : null
   }
+  const relationName: Record<MaterialRelation['relationType'], string> = { references: locale === 'zh-CN' ? '显式引用' : 'Explicit reference', shares_entities: locale === 'zh-CN' ? '共享实体' : 'Shared entity', nearby: locale === 'zh-CN' ? '结构邻近' : 'Structural proximity' }
   const evidenceLocation = (item: MaterialRelation['evidence'][number], materialId: string): string => {
     const source = item.sourceMaterialId === materialId
     const page = source ? item.sourcePageNumber : item.targetPageNumber
     const offset = source ? item.sourceOffset : item.targetOffset
-    return page ? ` · 第 ${page} 页` : offset != null ? ` · 位置 ${offset}` : ''
+    return page ? ` · ${t('explorer.page', { page })}` : offset != null ? ` · ${t('explorer.position', { offset })}` : ''
   }
   return (
     <section className="explorer-view">
       <aside className="explorer-list">
-        <header><span>材料探索</span><small>{materials.length} 份</small></header>
+        <header><span>{t('explorer.materials')}</span><small>{t('explorer.materialCount', { count: materials.length })}</small></header>
         <div>
           {materials.map((material) => (
             <button key={material.id} className={material.id === selectedId ? 'active' : ''} onClick={() => choose(material)}>
@@ -103,47 +104,47 @@ export function Explorer({ materials, topics, initialMaterialId, onSelect, onCha
             <header>
               <span className="material-type">{selected.type}</span>
               <h1>{selected.title}</h1>
-              <p>{selected.sourcePath ?? selected.url ?? '工作区材料'}</p>
+              <p>{selected.sourcePath ?? selected.url ?? t('explorer.workspaceMaterial')}</p>
             </header>
             <div className="explorer-document">
               <MaterialPreview material={selected} text={selected.extractedText ?? selected.excerpt ?? ''} focus={evidenceFocus}/>
             </div>
           </>
-        ) : <div className="explorer-empty">选择一份材料开始探索。</div>}
+        ) : <div className="explorer-empty">{t('explorer.selectToStart')}</div>}
       </article>
       <aside className="explorer-relations">
         <header>
           <div>
-            <h2>关联材料</h2>
-            <p>本地即时计算，可展开查看证据。</p>
+            <h2>{t('explorer.relatedMaterials')}</h2>
+            <p>{t('explorer.relatedCopy')}</p>
           </div>
-          <button className={`hidden-toggle ${showHidden ? 'active' : ''}`} title={showHidden ? '只显示可见关系' : '显示已隐藏关系'} onClick={() => setShowHidden((value) => !value)}>{showHidden ? <Eye size={15}/> : <EyeOff size={15}/>}<span>{relations.length}</span></button>
+          <button className={`hidden-toggle ${showHidden ? 'active' : ''}`} title={showHidden ? t('explorer.showVisible') : t('explorer.showHidden')} aria-label={showHidden ? t('explorer.showVisible') : t('explorer.showHidden')} onClick={() => setShowHidden((value) => !value)}>{showHidden ? <Eye size={15}/> : <EyeOff size={15}/>}<span>{relations.length}</span></button>
         </header>
         {actionError && <p className="explorer-error" role="alert">{actionError}</p>}
         {fixing && (
           <section className="fix-relation">
-            <strong>固定到主题画板</strong>
-            <p>两份材料与这条正式关系会加入所选主题。</p>
+            <strong>{t('explorer.pinTitle')}</strong>
+            <p>{t('explorer.pinCopy')}</p>
             {topics.length > 0 && (
               <select value={topicId} onChange={(event) => setTopicId(event.target.value)}>
-                <option value="">选择主题</option>
+                <option value="">{t('explorer.selectTopic')}</option>
                 {topics.map((topic) => <option key={topic.id} value={topic.id}>{topic.name}</option>)}
               </select>
             )}
-            <input value={newTopicName} onChange={(event) => setNewTopicName(event.target.value)} placeholder={topics.length ? '或创建新主题' : '新主题名称'}/>
+            <input value={newTopicName} onChange={(event) => setNewTopicName(event.target.value)} placeholder={topics.length ? t('explorer.orCreateTopic') : t('explorer.newTopic')}/>
             <div>
-              <button className="secondary-button" onClick={() => setFixing(null)}>取消</button>
-              <button className="primary-button" onClick={() => void fixToTopic()}>固定关系</button>
+              <button className="secondary-button" onClick={() => setFixing(null)}>{t('explorer.cancel')}</button>
+              <button className="primary-button" onClick={() => void fixToTopic()}>{t('explorer.pinRelation')}</button>
             </div>
           </section>
         )}
         {!selected ? null : loading ? (
-          <div className="explorer-empty"><p>正在读取本地关联...</p></div>
+          <div className="explorer-empty"><p>{t('explorer.loading')}</p></div>
         ) : loadError ? (
           <div className="explorer-empty">
-            <p>无法读取关联材料。</p>
+            <p>{t('explorer.loadFailed')}</p>
             <small>{loadError}</small>
-            <button className="secondary-button" onClick={() => void loadRelations(selected.id)}>重试</button>
+            <button className="secondary-button" onClick={() => void loadRelations(selected.id)}>{t('explorer.retry')}</button>
           </div>
         ) : relations.length ? (
           <div className="relation-list">
@@ -158,12 +159,12 @@ export function Explorer({ materials, topics, initialMaterialId, onSelect, onCha
                   <Link2 size={14}/>
                 </button>
                 <div className="relation-actions">
-                  <button title="查看证据" onClick={() => setExpanded(expanded === relation.id ? null : relation.id)}><Sparkles size={14}/></button>
-                  <button title="固定到主题画板" disabled={relation.status === 'fixed'} onClick={() => setFixing(relation)}><Pin size={14}/></button>
+                  <button title={t('explorer.viewEvidence')} aria-label={t('explorer.viewEvidence')} onClick={() => setExpanded(expanded === relation.id ? null : relation.id)}><Sparkles size={14}/></button>
+                  <button title={t('explorer.pinTitle')} aria-label={t('explorer.pinTitle')} disabled={relation.status === 'fixed'} onClick={() => setFixing(relation)}><Pin size={14}/></button>
                   {relation.status === 'hidden'
-                    ? <button title="恢复显示这条关联" onClick={() => void changeStatus(relation, 'visible')}><Eye size={14}/></button>
-                    : <button title="隐藏这条关联" onClick={() => void changeStatus(relation, 'hidden')}><EyeOff size={14}/></button>}
-                  <button title="AI 解释" disabled={explaining === relation.id} onClick={() => void explain(relation)}><Bot size={14}/></button>
+                    ? <button title={t('explorer.restoreRelation')} aria-label={t('explorer.restoreRelation')} onClick={() => void changeStatus(relation, 'visible')}><Eye size={14}/></button>
+                    : <button title={t('explorer.hideRelation')} aria-label={t('explorer.hideRelation')} onClick={() => void changeStatus(relation, 'hidden')}><EyeOff size={14}/></button>}
+                  <button title={t('explorer.aiExplain')} aria-label={t('explorer.aiExplain')} disabled={explaining === relation.id} onClick={() => void explain(relation)}><Bot size={14}/></button>
                 </div>
                 {expanded === relation.id && (
                   <div className="relation-evidence">
@@ -172,14 +173,14 @@ export function Explorer({ materials, topics, initialMaterialId, onSelect, onCha
                       return (
                         <div key={item.id} className="evidence-item">
                           <p>{item.text}</p>
-                          <button className="evidence-source" title="在阅读器中定位原文" onClick={() => choose(origin, focusFor(item, origin.id))}>来源：{origin.title}{evidenceLocation(item, origin.id)}</button>
+                          <button className="evidence-source" title={t('explorer.locateSource')} onClick={() => choose(origin, focusFor(item, origin.id))}>{t('explorer.source', { title: origin.title })}{evidenceLocation(item, origin.id)}</button>
                         </div>
                       )
                     })}
-                    <button className="evidence-jump" onClick={() => choose(relation.target)}>跳转到「{relation.target.title}」</button>
+                    <button className="evidence-jump" onClick={() => choose(relation.target)}>{t('explorer.jumpTo', { title: relation.target.title })}</button>
                     {explanations[relation.id] && (
                       <div className="ai-explanation">
-                        <strong>{explanations[relation.id].supported ? explanations[relation.id].label : 'AI 未确认'}</strong>
+                        <strong>{explanations[relation.id].supported ? explanations[relation.id].label : t('explorer.aiNotConfirmed')}</strong>
                         <p>{explanations[relation.id].explanation}</p>
                       </div>
                     )}
@@ -190,8 +191,8 @@ export function Explorer({ materials, topics, initialMaterialId, onSelect, onCha
           </div>
         ) : (
           <div className="explorer-empty">
-            <p>未找到可验证关联。</p>
-            <small>导入更多有标题、章节或文件引用的材料后会自动更新。</small>
+            <p>{t('explorer.noVerified')}</p>
+            <small>{t('explorer.importMore')}</small>
           </div>
         )}
       </aside>

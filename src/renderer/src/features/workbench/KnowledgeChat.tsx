@@ -4,6 +4,7 @@ import ReactMarkdown from 'react-markdown'
 import rehypeSanitize from 'rehype-sanitize'
 import remarkGfm from 'remark-gfm'
 import type { GroundedAnswer, GroundedCitation, KnowledgeChatTurn } from '../../types'
+import { useI18n } from '../../i18n'
 import './knowledge-chat.css'
 
 export type KnowledgeChatMessage =
@@ -12,7 +13,7 @@ export type KnowledgeChatMessage =
   | { id: string; role: 'error'; content: string; createdAt: string }
 
 const newId = (): string => globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
-const sessionDate = (value: string): string => new Intl.DateTimeFormat('zh-CN', { month: 'numeric', day: 'numeric' }).format(new Date(value))
+const sessionDate = (value: string, locale: string): string => new Intl.DateTimeFormat(locale, { month: 'numeric', day: 'numeric' }).format(new Date(value))
 
 export function KnowledgeChat({ messages, aiStatus, sessions, activeSessionId, onSelectSession, onNewConversation, onMessagesChange, onClear, onConfigure, onOpenCitation }: {
   messages: KnowledgeChatMessage[]
@@ -26,6 +27,7 @@ export function KnowledgeChat({ messages, aiStatus, sessions, activeSessionId, o
   onConfigure(): void
   onOpenCitation(citation: GroundedCitation): void
 }): React.ReactElement {
+  const { t, locale } = useI18n()
   const [question, setQuestion] = useState('')
   const [loading, setLoading] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
@@ -69,7 +71,7 @@ export function KnowledgeChat({ messages, aiStatus, sessions, activeSessionId, o
       const answer = await window.materialMap.ask({ question: nextQuestion, history }) as GroundedAnswer
       onMessagesChange((messages) => [...messages, { id: newId(), role: 'assistant', answer, createdAt: new Date().toISOString() }])
     } catch (reason) {
-      onMessagesChange((messages) => [...messages, { id: newId(), role: 'error', content: reason instanceof Error ? reason.message : '材料问答暂时不可用，请稍后重试。', createdAt: new Date().toISOString() }])
+      onMessagesChange((messages) => [...messages, { id: newId(), role: 'error', content: reason instanceof Error ? reason.message : 'Material chat is temporarily unavailable. Please try again later.', createdAt: new Date().toISOString() }])
     } finally {
       setLoading(false)
       window.setTimeout(() => textareaRef.current?.focus(), 0)
@@ -77,54 +79,54 @@ export function KnowledgeChat({ messages, aiStatus, sessions, activeSessionId, o
   }
 
   return (
-    <section className="knowledge-chat" aria-label="材料问答">
+    <section className="knowledge-chat" aria-label={t('chat.aria')}>
       <header className="knowledge-chat-header">
-        <span className="knowledge-chat-kb-status"><span className={`knowledge-chat-status-dot ${aiStatus}`}/>{aiStatus === 'ready' ? 'AI 已配置' : aiStatus === 'loading' ? '正在检查 AI 配置' : 'AI 未配置'}</span>
+        <span className="knowledge-chat-kb-status"><span className={`knowledge-chat-status-dot ${aiStatus}`}/>{aiStatus === 'ready' ? t('chat.readyStatus') : aiStatus === 'loading' ? t('chat.checking') : t('chat.missingStatus')}</span>
         <div className="knowledge-chat-header-actions">
           <div className="knowledge-chat-history" ref={historyRef}>
-            <button className="knowledge-chat-tool" type="button" title="会话记录" aria-label="会话记录" aria-expanded={historyOpen} onClick={() => setHistoryOpen((open) => !open)}><Clock3 size={16}/></button>
+            <button className="knowledge-chat-tool" type="button" title={t('chat.history')} aria-label={t('chat.history')} aria-expanded={historyOpen} onClick={() => setHistoryOpen((open) => !open)}><Clock3 size={16}/></button>
             {historyOpen && (
               <div className="knowledge-chat-history-menu" role="menu">
-                <header><strong>会话记录</strong><span>{recentSessions.length}/10</span></header>
+                <header><strong>{t('chat.history')}</strong><span>{recentSessions.length}/10</span></header>
                 <div className="knowledge-chat-history-list">
                   {recentSessions.map((session) => (
                     <button type="button" role="menuitem" className={session.id === activeSessionId ? 'active' : ''} key={session.id} onClick={() => { onSelectSession(session.id); setHistoryOpen(false) }}>
-                      <span><strong>{session.title}</strong><small>{sessionDate(session.updatedAt)}</small></span>{session.id === activeSessionId && <Check size={14}/>}
+                      <span><strong>{session.title}</strong><small>{sessionDate(session.updatedAt, locale)}</small></span>{session.id === activeSessionId && <Check size={14}/>}
                     </button>
                   ))}
-                  {archivedSessions.length > 0 && <div className="knowledge-chat-history-section"><Archive size={13}/>已归档 · {archivedSessions.length}</div>}
+                  {archivedSessions.length > 0 && <div className="knowledge-chat-history-section"><Archive size={13}/>{t('chat.archived', { count: archivedSessions.length })}</div>}
                   {archivedSessions.map((session) => (
                     <button type="button" role="menuitem" className={session.id === activeSessionId ? 'active archived' : 'archived'} key={session.id} onClick={() => { onSelectSession(session.id); setHistoryOpen(false) }}>
-                      <span><strong>{session.title}</strong><small>{sessionDate(session.updatedAt)}</small></span>{session.id === activeSessionId && <Check size={14}/>}
+                      <span><strong>{session.title}</strong><small>{sessionDate(session.updatedAt, locale)}</small></span>{session.id === activeSessionId && <Check size={14}/>}
                     </button>
                   ))}
                 </div>
               </div>
             )}
           </div>
-          <button className="knowledge-chat-tool" type="button" title="新建对话" aria-label="新建对话" onClick={onNewConversation}><Plus size={16}/></button>
-          <button className="knowledge-chat-tool" type="button" title="配置 AI" aria-label="配置 AI" onClick={onConfigure}><Settings size={16}/></button>
-          <button className="knowledge-chat-tool" type="button" title="清空问答" aria-label="清空问答" disabled={!messages.length || loading} onClick={onClear}><Trash2 size={16}/></button>
+          <button className="knowledge-chat-tool" type="button" title={t('chat.newConversation')} aria-label={t('chat.newConversation')} onClick={onNewConversation}><Plus size={16}/></button>
+          <button className="knowledge-chat-tool" type="button" title={t('chat.configure')} aria-label={t('chat.configure')} onClick={onConfigure}><Settings size={16}/></button>
+          <button className="knowledge-chat-tool" type="button" title={t('chat.clear')} aria-label={t('chat.clear')} disabled={!messages.length || loading} onClick={onClear}><Trash2 size={16}/></button>
         </div>
       </header>
 
       <div className="knowledge-chat-messages" aria-live="polite">
         {!messages.length && !loading && aiStatus === 'loading' && (
-          <div className="knowledge-chat-empty"><span className="knowledge-chat-empty-icon"><Bot size={23}/></span><h2>正在检查 AI 配置</h2></div>
+          <div className="knowledge-chat-empty"><span className="knowledge-chat-empty-icon"><Bot size={23}/></span><h2>{t('chat.checking')}</h2></div>
         )}
         {!messages.length && !loading && aiStatus === 'missing' && (
           <div className="knowledge-chat-empty knowledge-chat-setup">
             <span className="knowledge-chat-empty-icon"><Bot size={23}/></span>
-            <h2>先配置 AI</h2>
-            <p>添加并启用你自己的 AI 服务后才能向材料提问。</p>
-            <button type="button" className="primary-button" onClick={onConfigure}><Settings size={15}/>配置 AI</button>
+            <h2>{t('chat.configureFirst')}</h2>
+            <p>{t('chat.configureCopy')}</p>
+            <button type="button" className="primary-button" onClick={onConfigure}><Settings size={15}/>{t('chat.configure')}</button>
           </div>
         )}
         {!messages.length && !loading && aiStatus === 'ready' && (
           <div className="knowledge-chat-empty">
             <span className="knowledge-chat-empty-icon"><Bot size={23}/></span>
-            <h2>询问或整理 Material Map</h2>
-            <p>可以查询材料、回答通用问题，或提出待审核的画板操作。</p>
+            <h2>{t('chat.readyTitle')}</h2>
+            <p>{t('chat.readyCopy')}</p>
           </div>
         )}
         {messages.map((message) => {
@@ -136,15 +138,15 @@ export function KnowledgeChat({ messages, aiStatus, sessions, activeSessionId, o
               <div className="knowledge-chat-assistant-message">
                 <div className="knowledge-chat-answer"><ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>{message.answer.answer}</ReactMarkdown></div>
                 <div className="knowledge-chat-answer-meta">
-                  <span>{message.answer.confidence !== 'grounded' ? '材料证据不足' : message.answer.answerScope === 'general' ? '模型通用回答' : message.answer.answerScope === 'action' ? '待审核操作' : '基于本地材料'}</span>
-                  {message.answer.answerScope !== 'general' && message.answer.retrievedChunks !== undefined && <span>{message.answer.retrievalMode === 'hybrid' ? '混合检索' : message.answer.retrievalMode === 'fts' ? '关键词检索' : '目录回退'} · {message.answer.retrievedChunks} 段</span>}
-                  {message.answer.toolCalls && message.answer.toolCalls.length > 0 && <span title="AI 已根据当前问题自动查阅本地能力">AI 已查阅 · {message.answer.toolCalls.length}</span>}
-                  {message.answer.answerMode === 'local-fallback' && <span>模型未给出完整回答 · 已根据本地证据整理</span>}
-                  <span aria-label="AI 模型">{message.answer.model ? `模型 · ${message.answer.model}` : message.answer.model === null ? '未调用 AI' : '模型信息未记录'}</span>
+                  <span>{message.answer.confidence !== 'grounded' ? t('chat.insufficientEvidence') : message.answer.answerScope === 'general' ? t('chat.generalAnswer') : message.answer.answerScope === 'action' ? t('chat.reviewAction') : t('chat.localEvidence')}</span>
+                  {message.answer.answerScope !== 'general' && message.answer.retrievedChunks !== undefined && <span>{message.answer.retrievalMode === 'hybrid' ? t('chat.hybridSearch') : message.answer.retrievalMode === 'fts' ? t('chat.keywordSearch') : t('chat.directoryFallback')} · {message.answer.retrievedChunks}</span>}
+                  {message.answer.toolCalls && message.answer.toolCalls.length > 0 && <span title={t('chat.aiConsulted', { count: message.answer.toolCalls.length })}>{t('chat.aiConsulted', { count: message.answer.toolCalls.length })}</span>}
+                  {message.answer.answerMode === 'local-fallback' && <span>{t('chat.localFallback')}</span>}
+                  <span aria-label="AI model">{message.answer.model ? t('chat.model', { model: message.answer.model }) : message.answer.model === null ? t('chat.notCalled') : t('chat.modelInfoMissing')}</span>
                 </div>
                 {message.answer.citations.length > 0 && (
                   <details className="knowledge-chat-citations">
-                    <summary><BookOpen size={14}/>{message.answer.citations.length} 个来源<ChevronDown size={14}/></summary>
+                    <summary><BookOpen size={14}/>{t('chat.sources', { count: message.answer.citations.length })}<ChevronDown size={14}/></summary>
                     <div className="knowledge-chat-citation-list">
                       {message.answer.citations.map((citation, index) => (
                         <button type="button" key={`${citation.materialId}:${citation.chunkId ?? index}`} onClick={() => onOpenCitation(citation)}>
@@ -159,7 +161,7 @@ export function KnowledgeChat({ messages, aiStatus, sessions, activeSessionId, o
             </div>
           )
         })}
-        {loading && <div className="knowledge-chat-row assistant loading"><span className="knowledge-chat-avatar"><Bot size={16}/></span><div className="knowledge-chat-assistant-message"><span/><span/><span/><small>正在检索材料</small></div></div>}
+        {loading && <div className="knowledge-chat-row assistant loading"><span className="knowledge-chat-avatar"><Bot size={16}/></span><div className="knowledge-chat-assistant-message"><span/><span/><span/><small>{t('chat.searching')}</small></div></div>}
         <div ref={bottomRef}/>
       </div>
 
@@ -177,12 +179,12 @@ export function KnowledgeChat({ messages, aiStatus, sessions, activeSessionId, o
                 void submit()
               }
             }}
-            placeholder={aiStatus === 'ready' ? '提问，或让 AI 查询材料和整理画板' : '请先配置 AI 后再提问'}
-            aria-label="询问材料"
+            placeholder={aiStatus === 'ready' ? t('chat.askPlaceholder') : t('chat.configurePlaceholder')}
+            aria-label={t('chat.askLabel')}
           />
-          <button type="button" className="knowledge-chat-send" title="发送" aria-label="发送" disabled={!question.trim() || loading || aiStatus !== 'ready'} onClick={() => void submit()}><Send size={17}/></button>
+          <button type="button" className="knowledge-chat-send" title={t('chat.send')} aria-label={t('chat.send')} disabled={!question.trim() || loading || aiStatus !== 'ready'} onClick={() => void submit()}><Send size={17}/></button>
         </div>
-        <small>{aiStatus === 'ready' ? 'Enter 发送，Shift + Enter 换行' : '配置并启用 AI 后可以开始提问'}</small>
+        <small>{aiStatus === 'ready' ? t('chat.enterHint') : t('chat.configureHint')}</small>
       </footer>
     </section>
   )

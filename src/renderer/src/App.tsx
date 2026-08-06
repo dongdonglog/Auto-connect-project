@@ -14,8 +14,10 @@ import { ImportQueue } from './components/ImportQueue'
 import { MaterialMenu } from './components/MaterialMenu'
 import { LinkDialog, NoteDialog, SettingsDialog, TopicDialog, WorkspaceDialog, WorkspacePasswordDialog } from './components/Dialogs'
 import { Toast } from './components/Toast'
+import { useI18n } from './i18n'
 
 export default function App(): React.ReactElement {
+  const { t } = useI18n()
   const [workspace, setWorkspace] = useState<Workspace | null>(null)
   const [recentWorkspaces, setRecentWorkspaces] = useState<Array<{ root: string; name: string; openedAt: string }>>([])
   const [materials, setMaterials] = useState<Material[]>([])
@@ -130,7 +132,7 @@ export default function App(): React.ReactElement {
       setWorkspace(await window.materialMap.workspace.open(root) as Workspace)
       await refreshRecent()
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '无法打开工作区')
+      setMessage(error instanceof Error ? error.message : t('app.workspaceOpenError'))
     }
   }
   const importWorkspace = async () => {
@@ -143,9 +145,9 @@ export default function App(): React.ReactElement {
       if (info.encrypted) { setPasswordRequest({ kind: 'import', name: info.name, file, destination }); return }
       setWorkspace(await window.materialMap.workspace.import(file, destination) as Workspace)
       await refreshRecent()
-      setMessage('工作区已导入。')
+      setMessage(t('app.workspaceImported'))
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '无法导入工作区。')
+      setMessage(error instanceof Error ? error.message : t('app.workspaceImportError'))
     }
   }
   const openRecent = async (root: string) => {
@@ -155,14 +157,14 @@ export default function App(): React.ReactElement {
       setWorkspace(await window.materialMap.workspace.open(root) as Workspace)
       await refreshRecent()
     } catch {
-      setMessage('这个工作区已无法打开，请确认文件夹仍然存在。')
+      setMessage(t('app.workspaceOpenFailed'))
     }
   }
   const exportWorkspace = async () => {
     const destination = await window.materialMap.savePackage()
     if (destination) {
       await window.materialMap.workspace.export(destination)
-      setMessage('工作区已导出。')
+      setMessage(t('app.workspaceExported'))
     }
   }
   const createDemo = async () => {
@@ -170,13 +172,13 @@ export default function App(): React.ReactElement {
       const topic = await window.materialMap.demo.create() as Topic
       await refresh()
       await openTopic(topic)
-      setMessage('已创建学习路径演示。')
+      setMessage(t('app.demoCreated'))
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '无法创建学习路径演示。')
+      setMessage(error instanceof Error ? error.message : t('app.createDemoFailed'))
     }
   }
   const createTopicFromMaterials = async (materialIds: string[]) => {
-    const name = window.prompt('新主题名称')
+    const name = window.prompt(t('dialog.topicName'))
     if (!name?.trim()) return
     const topic = await window.materialMap.topics.create(name.trim()) as Topic
     await window.materialMap.topics.addMaterials(topic.id, materialIds)
@@ -184,10 +186,10 @@ export default function App(): React.ReactElement {
     setActiveTopic(await window.materialMap.topics.map(topic.id) as TopicMap)
     setSelected(null)
     setShowChat(false)
-    setMessage(`已将 ${materialIds.length} 份材料加入主题。可在画板中手动连接和整理。`)
+    setMessage(t('app.materialsAdded', { count: materialIds.length }))
   }
 
-  const passwordDialog = passwordRequest && <WorkspacePasswordDialog title={passwordRequest.kind === 'open' ? '打开加密工作区' : '导入加密工作区'} name={passwordRequest.name} onClose={() => setPasswordRequest(null)} onSubmit={async (password) => {
+  const passwordDialog = passwordRequest && <WorkspacePasswordDialog title={passwordRequest.kind === 'open' ? t('dialog.openEncryptedWorkspace') : t('dialog.importEncryptedWorkspace')} name={passwordRequest.name} onClose={() => setPasswordRequest(null)} onSubmit={async (password) => {
     const request = passwordRequest
     if (request.kind === 'open' && request.root) setWorkspace(await window.materialMap.workspace.open(request.root, password) as Workspace)
     if (request.kind === 'import' && request.file && request.destination) setWorkspace(await window.materialMap.workspace.import(request.file, request.destination, password) as Workspace)
@@ -264,9 +266,9 @@ export default function App(): React.ReactElement {
         onImportWorkspace={() => void importWorkspace()}
         onOpenRecent={(root) => void openRecent(root)}
         onCloseWorkspace={() => setWorkspace(null)}
-        onRestoreTopic={async (topic) => { await window.materialMap.topics.restore(topic.id); await refreshTopics(); setMessage(`已还原“${topic.name}”。`) }}
+        onRestoreTopic={async (topic) => { await window.materialMap.topics.restore(topic.id); await refreshTopics(); setMessage(t('app.topicRestored', { name: topic.name })) }}
         onDeleteArchivedTopic={async (topic) => {
-          if (!window.confirm(`永久删除主题“${topic.name}”的画板记录？原材料和文件不会删除。`)) return
+          if (!window.confirm(t('app.deleteTopicConfirm', { name: topic.name }))) return
           await window.materialMap.topics.deleteArchived(topic.id)
           await refreshTopics()
         }}
@@ -287,20 +289,20 @@ export default function App(): React.ReactElement {
           <div>
             {activeTopic ? (
               <>
-                <button className="back-button" onClick={() => { setActiveTopic(null); setShowChat(false) }}><ArrowLeft size={17}/>工作台</button>
+                <button className="back-button" onClick={() => { setActiveTopic(null); setShowChat(false) }}><ArrowLeft size={17}/>{t('app.backToWorkbench')}</button>
                 <h1>{activeTopic.topic.name}</h1>
               </>
             ) : showExplorer ? (
               <>
-                <h1>探索</h1>
-                <p>读一份材料，查看有证据的关联材料。</p>
+                <h1>{t('app.explorer')}</h1>
+                <p>{t('app.explorerSubtitle')}</p>
               </>
             ) : showChat ? (
-              <><h1>知识库问答</h1><p>从当前工作区材料中查找答案。</p></>
+              <><h1>{t('app.chat')}</h1><p>{t('app.chatSubtitle')}</p></>
             ) : (
               <>
-                <h1>工作台</h1>
-                <p>最近导入的材料，正在逐渐连成脉络。</p>
+                <h1>{t('app.workbench')}</h1>
+                <p>{t('app.workbenchSubtitle')}</p>
               </>
             )}
           </div>
@@ -310,20 +312,20 @@ export default function App(): React.ReactElement {
               <input
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="搜索材料或主题"
+                placeholder={t('app.searchPlaceholder')}
               />
             </label>
             {activeTopic && (
               <button className="secondary-button" onClick={async () => {
-                if (!window.confirm(`归档主题“${activeTopic.topic.name}”？不会删除任何材料和文件。`)) return
+                if (!window.confirm(t('app.archiveTopicConfirm', { name: activeTopic.topic.name }))) return
                 await window.materialMap.topics.archive(activeTopic.topic.id)
                 setActiveTopic(null)
                 await refresh()
-                setMessage('主题已归档。')
-              }}><Archive size={15}/>归档主题</button>
+                setMessage(t('app.topicArchived'))
+              }}><Archive size={15}/>{t('app.archiveTopic')}</button>
             )}
-            <button className="icon-button" title="导入文件" onClick={() => void importFiles()}><Upload size={18}/></button>
-            <button className="primary-button" onClick={() => setShowNote(true)}><Plus size={17}/>新建材料</button>
+            <button className="icon-button" title={t('app.importFile')} aria-label={t('app.importFile')} onClick={() => void importFiles()}><Upload size={18}/></button>
+            <button className="primary-button" onClick={() => setShowNote(true)}><Plus size={17}/>{t('app.newMaterial')}</button>
           </div>
         </header>
         {imports.length > 0 && (

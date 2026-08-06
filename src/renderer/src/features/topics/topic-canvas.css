@@ -103,3 +103,39 @@
 .react-flow__handle { width: 9px; height: 9px; background: var(--color-primary); border: 2px solid #fff; }
 .react-flow__handle.connecting { background: var(--color-note); }
 .flow-map .react-flow__background { pointer-events: none; }
+.flow-node-workstream { display: block; margin-bottom: 2px; color: var(--color-primary-hover); font-weight: 650; letter-spacing: .02em; }
+
+.workstream-navigator {
+  position: absolute;
+  z-index: 5;
+  top: 16px;
+  left: 70px;
+  width: 220px;
+  padding: 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, .94);
+  box-shadow: var(--shadow-sm);
+  color: #31475f;
+}
+.workstream-navigator header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; font-size: 12px; }
+.workstream-navigator header button { border: 0; background: transparent; color: var(--color-primary-hover); cursor: pointer; font-size: 11px; }
+.workstream-navigator header button:disabled { color: #aeb9c5; cursor: default; }
+.workstream-navigator > div { display: grid; grid-template-columns: minmax(0, 1fr) 24px; gap: 4px; align-items: center; }
+.workstream-navigator > div > button { min-width: 0; display: flex; align-items: center; justify-content: space-between; border: 0; border-radius: 5px; padding: 5px 6px; background: transparent; color: #4b6078; cursor: pointer; font-size: 11px; text-align: left; }
+.workstream-navigator > div > button:hover, .workstream-navigator > div.active > button:first-child { background: #e9f4f2; color: var(--color-primary-hover); }
+.workstream-navigator > div > button span { color: #8998a9; font-size: 10px; }
+.workstream-navigator > div > button:last-child { justify-content: center; color: #6e8093; }
+.canvas-ai-backdrop { position: fixed; z-index: 50; inset: 0; display: grid; place-items: center; padding: 24px; background: rgba(35, 52, 68, .22); }
+.canvas-ai-dialog { width: min(560px, 100%); display: grid; gap: 14px; padding: 18px; border: 1px solid var(--color-border); border-radius: 10px; background: var(--color-surface); box-shadow: 0 20px 60px rgba(30, 55, 78, .22); color: #31475f; }
+.canvas-ai-dialog header, .canvas-ai-dialog footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.canvas-ai-dialog header strong { display: block; font-size: 16px; }
+.canvas-ai-dialog header small { display: block; margin-top: 4px; color: #738398; font-size: 11px; }
+.canvas-ai-dialog label { display: grid; gap: 6px; color: #5b6e83; font-size: 12px; }
+.canvas-ai-dialog textarea { min-height: 120px; resize: vertical; padding: 9px; border: 1px solid var(--color-border-strong); border-radius: 6px; font: inherit; line-height: 1.5; }
+.canvas-ai-dialog textarea:focus { outline: none; border-color: var(--color-primary); box-shadow: 0 0 0 3px var(--color-primary-ring); }
+.canvas-ai-dialog > p { margin: -4px 0 0; color: #718095; font-size: 11px; }
+.canvas-ai-dialog .inspector-toggle { display: flex; grid-template-columns: none; align-items: center; gap: 7px; }
+.canvas-ai-dialog .inspector-toggle input { width: 15px; height: 15px; margin: 0; }
+.canvas-ai-consent-note { margin-top: -8px; color: #738398; font-size: 11px; line-height: 1.45; }
+.canvas-ai-dialog footer { justify-content: flex-end; }

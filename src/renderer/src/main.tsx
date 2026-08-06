@@ -2,6 +2,7 @@ import React from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App'
 import { ErrorBoundary } from './app/ErrorBoundary'
+import { I18nProvider } from './i18n'
 import './styles.css'
 import './answer.css'
 import './map.css'
@@ -25,4 +26,4 @@ window.addEventListener('paste', (event) => {
     document.execCommand('insertText', false, text)
   })
 })
-createRoot(document.getElementById('root')!).render(<React.StrictMode><ErrorBoundary><App /></ErrorBoundary></React.StrictMode>)
+createRoot(document.getElementById('root')!).render(<React.StrictMode><I18nProvider><ErrorBoundary><App /></ErrorBoundary></I18nProvider></React.StrictMode>)
