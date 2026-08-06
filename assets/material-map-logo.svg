@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" role="img" aria-labelledby="title desc">
+  <title id="title">Material Map</title>
+  <desc id="desc">Connected material map nodes</desc>
+  <rect width="120" height="120" rx="18" fill="#1464d2"/>
+  <path d="M30 38 60 22l30 16v44L60 98 30 82Z" fill="none" stroke="#fff" stroke-width="6" stroke-linejoin="round"/>
+  <path d="M30 38 60 54l30-16M60 54v44" fill="none" stroke="#fff" stroke-width="6" stroke-linejoin="round"/>
+  <circle cx="30" cy="38" r="7" fill="#ff806b"/>
+  <circle cx="90" cy="38" r="7" fill="#ff806b"/>
+  <circle cx="60" cy="98" r="7" fill="#ff806b"/>
+</svg>

@@ -16,7 +16,8 @@
     "test:ci": "vitest run src/main src/renderer/src --exclude src/main/workspace-stress.test.ts --exclude src/main/demo-service.test.ts --testTimeout=30000 --hookTimeout=30000",
     "test:e2e": "npm run build && vitest run src/e2e",
     "benchmark": "esbuild scripts/benchmark.ts --bundle --platform=node --format=cjs --packages=external --outfile=node_modules/.cache/benchmark.cjs && node node_modules/.cache/benchmark.cjs",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "check:readme": "node scripts/check-readme-assets.mjs"
   },
   "dependencies": {
     "@dagrejs/dagre": "^3.0.0",

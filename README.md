@@ -1,292 +1,258 @@
 <p align="center">
-  <img src="docs/logo.svg" alt="Material Map" width="120" />
+  <img src="./assets/material-map-logo.svg" alt="Material Map" width="112" />
 </p>
 
 <h1 align="center">Material Map</h1>
 
 <p align="center">
-  <strong>本地优先 · 证据驱动 · 可解释的材料关系探索器</strong>
+  <strong>让本地材料自己长出脉络。</strong><br />
+  将文件、笔记和链接留在自己的工作区，导入后按主题和证据形成可编辑的材料地图。
 </p>
 
 <p align="center">
-  <a href="#"><img src="https://img.shields.io/badge/version-1.0.0-blue" alt="Version" /></a>
-  <a href="#"><img src="https://img.shields.io/badge/platform-Windows%2010%2B-lightgrey" alt="Platform" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License" /></a>
-  <img src="https://img.shields.io/badge/electron-33%2B-47848f?logo=electron" alt="Electron" />
-  <img src="https://img.shields.io/badge/react-19-61dafb?logo=react" alt="React" />
+  <a href="https://github.com/dongdonglog/Auto-connect-project/releases/latest"><img src="https://img.shields.io/github/v/release/dongdonglog/Auto-connect-project?style=flat-square" alt="Latest release" /></a>
+  <a href="https://github.com/dongdonglog/Auto-connect-project/actions/workflows/windows-package.yml"><img src="https://img.shields.io/github/actions/workflow/status/dongdonglog/Auto-connect-project/windows-package.yml?branch=main&style=flat-square" alt="Build status" /></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-08776f?style=flat-square" alt="MIT License" /></a>
+  <a href="./README-EN.md">English</a>
 </p>
 
 <p align="center">
-  <em>打开一份材料，1 秒内看清它和什么有关、证据在哪。</em>
+  <img src="./assets/screenshots/02-workbench.png" alt="Material Map 工作台" width="960" />
 </p>
 
----
+## 这是什么
 
-> **当前版本：v1.0.0 正式版。** 核心闭环（导入 → 探索 → 固定 → 画板编辑 → 材料问答）已可运行。项目保持本地优先，AI 和 Agent 能力均由用户主动启用。
->
-> **版本说明：** 当前版本仅提供中文界面，暂未提供国际化/英文版；桌面安装包支持 Windows 10/11 和 macOS（DMG/ZIP）。Linux 支持在后续版本规划中。
+Material Map 是一个本地优先的桌面材料地图和小型知识库。它把材料导入、全文检索、可解释关联、主题画板和可选 AI 问答放在同一个工作区里。
 
-## 为什么需要 Material Map？
+它适合整理技术文档、项目资料、学习笔记和个人文件。原始文件仍由你管理；工作区保存索引、摘要、关系、主题布局和导出数据。AI 默认关闭，只有你主动配置并发送问题时才会接收本次请求所需的材料上下文。
 
-当本地材料积累到几十上百份时，你会遇到这些困境：
+## 下载
 
-- 🔍 **全文检索只能找到关键词，看不到关联** — 搜索 "支付" 找到 30 篇文档，但它们之间什么关系？
-- 🤔 **相似度推荐缺少证据** — 算法告诉你 A 和 B 相关，但不告诉你为什么
-- 💸 **AI 全量分析太慢、太贵、噪声太多** — 一次性分析所有材料既费时费钱，又容易产生虚假关联
-- 🎛️ **你整理的关系应该由你掌控** — 手动确认过的连线不该被系统悄悄覆盖
+当前稳定版本：[v1.0.0 Release](https://github.com/dongdonglog/Auto-connect-project/releases/tag/v1.0.0)
 
-Material Map 不做一个「全自动知识图谱」，而是做一个**探索工具**：你打开材料，它告诉你证据充分的关联，你可以选择固定、隐藏或继续深入，最后把确认的关系沉淀到主题画板中。
+| 平台 | 产物 | 适用场景 |
+| --- | --- | --- |
+| Windows x64 | [安装版](https://github.com/dongdonglog/Auto-connect-project/releases/download/v1.0.0/Material.Map.Setup.1.0.0.exe) · [Portable](https://github.com/dongdonglog/Auto-connect-project/releases/download/v1.0.0/Material.Map.1.0.0.exe) | Intel / AMD Windows 10/11 |
+| macOS arm64 | [DMG](https://github.com/dongdonglog/Auto-connect-project/releases/download/v1.0.0/Material.Map-1.0.0-arm64.dmg) · [ZIP](https://github.com/dongdonglog/Auto-connect-project/releases/download/v1.0.0/Material.Map-1.0.0-arm64-mac.zip) | Apple Silicon（M 系列） |
 
-## 与同类产品的区别
+macOS 首次打开若出现安全提示，请在“系统设置 → 隐私与安全性”中允许打开。当前安装包没有 Apple Developer ID 签名和公证。
 
-| | Material Map | Obsidian | Logseq | NotebookLM |
-|---|---|---|---|---|
-| **核心交互** | 以材料为中心探索关系 | 以笔记为中心双向链接 | 以大纲为中心块引用 | 以聊天为中心的 RAG |
-| **关系发现** | 显式引用 + 受控实体，每条关系带证据 | 手动 `[[link]]` | 手动 `[[link]]` + 块引用 | AI 自动生成 |
-| **离线可用** | ✅ 无需网络 | ✅ | ✅ | ❌ 需要云端 |
-| **AI 角色** | 按需解释关系、材料问答与可审核 Agent 提案 | 社区插件 | 社区插件 | 核心依赖 AI |
-| **数据存储** | 本地 SQLite | 本地 Markdown 文件 | 本地 Markdown 文件 | 云端 |
-| **目标场景** | 技术文档、代码、项目资料的关系探索 | 个人知识管理 | 大纲式笔记 | 文档对话 |
+## 核心能力
 
-## 核心功能
+- **本地工作区**：创建、打开、加密、导出和恢复工作区，原始文件不被应用移动。
+- **材料管理**：导入 Markdown、TXT、CSV、JSON、HTML、PDF、DOCX，或直接创建笔记、文档和链接。
+- **关系探索**：从材料中发现显式引用、共享实体和结构邻近关系，每条关联都可以展开证据。
+- **主题画板**：将材料固定到主题中，创建单向正式关系，编辑卡片样式、路径、箭头和布局。
+- **可选 AI**：接入 DeepSeek、OpenAI 兼容服务、Ollama、Anthropic 或 Gemini，回答材料问题并显示模型与来源。
+- **Agent / MCP**：AI 可以按问题查询材料、关系和主题；涉及画板修改时只生成待审核提案。
 
-### 📥 材料导入与管理
-- 支持 **Markdown、TXT、CSV、JSON、HTML、PDF、DOCX** 格式
-- 文件夹监听：新增、修改、删除自动增量同步
-- 材料失联后保留快照，不丢数据
-- 工作区导出/恢复，支持可选加密
+## 完整操作流程
 
-### 🔗 可解释的关系发现
-- **显式引用优先**：自动识别 Markdown 链接、相对路径、代码 import 等文件引用
-- **实体共现分析**：提取受控技术实体（项目名、模块名、框架等），找出真正相关的材料
-- **每条关系都有证据**：展开即见原文引用与可跳转位置
-- **反噪声机制**：通用高频词不产生关系，最多展示 5 条结果
+下面的流程对应当前应用界面。图片均为实际应用截图，路径使用仓库内的相对地址，克隆仓库后也可以正常查看。
 
-### 🎨 主题画板
-- 基于 React Flow 的交互式画布
-- 四边端口任意组合创建正式关系
-- 编辑关系标签、方向、颜色、线型
-- DAG 自动层级布局
+### 1. 创建或打开工作区
 
-### 🤖 可选 AI 增强
-- AI **默认关闭**，你完全掌控何时调用
-- 单条关系请求解释时，仅发送该关系的紧凑证据窗口
-- AI 失败不影响本地探索、阅读和画板操作
-- DeepSeek/OpenAI-compatible Agent：可回答通用问题，也可检索材料、读取关系和主题上下文
-- 画板操作只生成待审核提案；用户应用后进入画板撤销/重做历史
-- 本地工具同时通过 Electron IPC 和 stdio MCP 暴露，便于 CLI 或外部 Agent 调用
+启动应用后进入欢迎页：
 
-## 快速开始
+1. 点击“创建工作区”，选择一个本地目录并填写工作区名称。
+2. 如需保护工作区，勾选“加密本地工作区”，设置至少 8 位密码。
+3. 已有工作区使用“打开工作区”。
+4. `.material-workspace` 导出包使用“导入工作区”恢复。
+5. 最近打开过的工作区会显示在欢迎页，可直接重新打开。
 
-### 下载安装
+<p align="center">
+  <img src="./assets/screenshots/01-welcome.png" alt="Material Map 欢迎页" width="960" />
+</p>
 
-从 [Releases](https://github.com/dongdonglog/Auto-connect-project/releases) 页面下载最新安装包：
+### 2. 导入材料
 
-- **Windows NSIS 安装版** (`Material-Map-Setup-x.x.x.exe`)：标准安装，支持自定义安装路径
-- **Windows Portable 便携版** (`Material-Map-x.x.x.exe`)：解压即用，无需安装
-- **macOS DMG** (`Material-Map-x.x.x.dmg`)：挂载后拖入 Applications
-- **macOS ZIP** (`Material-Map-x.x.x-mac.zip`)：解压后将应用移入 Applications
+进入“工作台”后，点击右上角“导入文件”，选择一个或多个文件。当前支持 Markdown、TXT、CSV、JSON、HTML、PDF 和 DOCX。
 
-> macOS 首次打开若出现安全提示，请在「系统设置 → 隐私与安全性」中允许打开。当前版本未提供 Apple Developer ID 签名和公证。
+也可以点击“新建材料”创建笔记、Markdown、TXT、CSV、JSON 或 HTML，或者点击“添加链接”输入 `http://` / `https://` 地址。导入后等待解析和索引任务完成，材料卡片会显示标题、类型、摘要、日期和处理状态。
 
-### 基本使用
+<p align="center">
+  <img src="./assets/screenshots/02-workbench.png" alt="Material Map 工作台材料卡片" width="960" />
+</p>
 
-1. **启动并创建工作区**：首次启动选择「创建工作区」，指定一个专门的本地目录；已有工作区可直接选择「打开工作区」。
-2. **导入材料**：在工作台点击导入按钮，选择文件夹或多个文件，也可以把文件拖入窗口。支持 Markdown、TXT、CSV、JSON、HTML、PDF、DOCX。
-3. **等待索引完成**：导入队列会显示解析和索引进度。文件内容、标题、路径和可识别实体会写入当前工作区的本地数据库，原始文件不会被复制或上传。
-4. **阅读单份材料**：在材料列表中点击文件，中央阅读器显示内容；失联文件会保留快照，并标记原始路径已不可用。
-5. **探索关系**：切换到「探索」，右侧会列出与当前材料相关的文件。展开一条关系可查看来源文件、匹配片段和证据位置，点击证据可以跳回原文。
-6. **筛选关系**：对有价值的关系选择「固定」，对明显无关的关系选择「隐藏」。系统会保留你的选择，不会在下一次索引时覆盖手动确认的关系。
-7. **整理主题画板**：进入「主题画板」查看固定关系。拖动材料卡片调整布局，从卡片四边端口创建关系，编辑关系标签、方向、颜色和线型；支持多选、删除以及撤销/重做。
-8. **按主题继续阅读**：在画板中选中材料或关系，可回到阅读器查看原文和证据；也可以从材料菜单继续进入关系探索。
-9. **启用材料问答（可选）**：进入「问答」并填写兼容 OpenAI API 的模型地址、模型名和 API Key。AI 默认关闭，只有你主动发送问题时才会调用；回答会显示实际使用的模型和引用来源。
-10. **使用 Agent（可选）**：配置后，Agent 会根据问题调用材料目录、全文检索、关系和主题工具。涉及画板修改时只生成待审核提案，确认后才会写入画板。
-11. **备份和迁移**：在工作区菜单中导出工作区包，按需启用加密；在另一台设备选择「恢复工作区」即可导入。请将导出包和 API Key 保存在安全位置。
+### 3. 管理材料
 
-### 界面示例
+在工作台可以：
 
-下面是当前版本的 README/产品界面预览。图片已经随仓库提交，GitHub 无需访问临时文件路径：
+- 搜索材料或主题。
+- 按“最近导入”或“按主题”排序筛选。
+- 点击卡片阅读材料详情。
+- 编辑文本类材料的标题和内容。
+- 修改日期、加入主题或进入“探索”。
+- 在材料菜单中删除工作区记录。
 
-![Material Map 界面示例](./docs/screenshots/readme-preview.png)
+删除材料只删除当前工作区中的材料记录，不会删除原始导入文件。
 
-## 开发指南
+### 4. 探索材料关系
 
-### 环境要求
+点击侧边栏“探索”，进入三栏视图：左侧选择材料，中间阅读原文，右侧查看关联材料。
 
-- **Node.js** 24+
-- **操作系统** Windows 10/11 或 macOS 12+
+1. 点击右侧关联卡片查看目标材料。
+2. 点击证据按钮展开原文片段。
+3. 点击证据来源跳转到阅读器中的原文位置。
+4. 使用眼睛按钮隐藏或恢复一条关联。
+5. 使用图钉按钮将关系固定到已有主题或新建主题。
+6. AI 配置完成后，可以请求单条关系解释；本地证据仍然可以在没有 AI 时查看。
 
-### 本地开发
+<p align="center">
+  <img src="./assets/screenshots/03-explorer.png" alt="Material Map 材料探索和关联证据" width="960" />
+</p>
+
+### 5. 创建主题画板
+
+主题用于保存一组材料的正式关系和独立布局：
+
+1. 在侧边栏“主题”右侧点击“+”新建主题。
+2. 在工作台按住 `Cmd` / `Ctrl` 多选材料，再点击“从所选创建主题”。
+3. 在画板中也可以使用“从工作台添加”选择材料。
+4. 画板右键菜单还支持“导入文件到此处”“新建卡片”和“粘贴文本为卡片”。
+
+<p align="center">
+  <img src="./assets/screenshots/05-topic-board.png" alt="Material Map 主题画板" width="960" />
+</p>
+
+### 6. 编辑主题画板和关系
+
+画板工具栏提供两种视图：
+
+- **自由画板**：自由摆放卡片和关系。
+- **流程视图**：按连接关系自动排列卡片。
+
+常用操作：
+
+1. 拖动卡片调整位置。
+2. 从一张卡片的端口拖到另一张卡片端口，创建一条默认单向关系。
+3. 点击连线打开“关系属性”。
+4. 编辑关系名称、起点端口、终点端口、路径、标签位置、颜色、线宽、线型、箭头和动画。
+5. 使用“反转方向”明确改变关系方向；系统不会自动把单向关系变成双向关系。
+6. 点击卡片打开“画板卡片属性”，只修改当前主题的显示标题、摘要、颜色、标签、备注和布局样式。
+7. 使用“自动排版”按关系整理位置，使用“适配视图”缩放到全部卡片。
+
+### 7. 多选、删除、平移和撤销
+
+- 从画布空白处左键拖拽，可以框选卡片和连线。
+- 框选后，在选区范围内的空白处右键打开所选内容菜单。
+- macOS 使用 `Control + 单击` 代替右键。
+- `Delete` / `Backspace` 删除当前选择。
+- 删除卡片只将它移出当前主题，不删除原始材料。
+- 单独删除连线才会删除正式材料关系。
+- `Cmd/Ctrl + Z` 撤销，`Cmd/Ctrl + Shift + Z` 重做。
+- `Space + 左键拖拽`、中键或触控板滚动用于平移画布。
+
+### 8. 配置 AI
+
+打开侧边栏“模型与隐私”，点击“配置 AI”创建配置：
+
+1. 填写配置名称。
+2. 选择服务协议：OpenAI 兼容、本机 Ollama、Anthropic 或 Google Gemini。
+3. 填写服务地址。
+4. 除 Ollama 外，粘贴 API Key。
+5. 点击“发现模型并保存”，应用会自动发现并选择推荐模型。
+6. 如果使用云端服务，勾选“我理解材料文本会发送到外部服务”。
+7. 勾选“启用 AI 功能”，再点击“验证当前 AI”。
+
+<p align="center">
+  <img src="./assets/screenshots/07-ai-settings.png" alt="Material Map AI 配置和隐私设置" width="960" />
+</p>
+
+### 9. 使用知识库问答
+
+打开侧边栏“知识库问答”。AI 未配置或未启用时，输入框不会发送问题。
+
+配置完成后，可以询问工作区材料数量、材料内容、章节、材料关系和主题画板，也可以提出通用技术问题。AI 会根据当前工作区目录、相关检索片段、材料关系和主题上下文回答，而不是读取外部知识库。
+
+每条回答会显示：
+
+- 实际使用的模型名称。
+- 关键词或混合检索方式。
+- AI 是否查阅了本地工具。
+- 来源材料、章节和引用片段。
+
+知识库问答最多保留 10 个最近会话，超过后自动归档。涉及画板修改的请求只生成待审核提案，用户确认后才会真正修改画板。
+
+<p align="center">
+  <img src="./assets/screenshots/04-knowledge-chat.png" alt="Material Map 知识库问答" width="960" />
+</p>
+
+### 10. 持续同步文件夹
+
+打开侧边栏“文件夹来源”：
+
+1. 点击“添加文件夹”选择材料目录。
+2. 设置可选的包含规则和排除规则。
+3. 开启“监控文件变化”，让应用持续索引新增和修改的文件。
+4. 使用“重新扫描”手动同步。
+5. 可以暂停、恢复或移除文件夹来源。
+
+移除文件夹来源不会删除已经建立的材料记录。
+
+<p align="center">
+  <img src="./assets/screenshots/06-folder-sources.png" alt="Material Map 文件夹来源" width="960" />
+</p>
+
+### 11. 导出和恢复工作区
+
+1. 在侧边栏点击“导出工作区”。
+2. 选择保存位置，保存为 `.material-workspace` 文件。
+3. 在另一台设备启动应用，点击欢迎页的“导入工作区”。
+4. 选择导出包并按提示输入密码。
+5. AI 配置和 API Key 保存在应用配置中，不会随工作区导出包迁移，需要在目标设备重新配置。
+
+<p align="center">
+  <img src="./assets/screenshots/08-export-workspace.png" alt="Material Map 导出工作区" width="960" />
+</p>
+
+## 隐私和数据边界
+
+- 工作区数据库、索引、摘要和关系默认保存在本地。
+- 原始导入文件不会被应用移动或删除。
+- AI 默认关闭；云端 AI 只有在用户配置、授权并主动提问后才会收到必要文本。
+- AI 对画板的修改先生成待审核提案，不会静默修改正式关系。
+- 请不要把 API Key、工作区数据库、导出包或个人材料提交到 Git 仓库。
+
+## 从源码运行
+
+环境要求：Node.js 24+，Windows 10/11 或 macOS 12+。
 
 ```bash
-# 克隆仓库
 git clone https://github.com/dongdonglog/Auto-connect-project.git
 cd Auto-connect-project
-
-# 安装依赖
 npm install
-
-# 启动开发模式（热重载）
 npm run dev
 ```
 
-### 常用命令
+常用命令：
 
-| 命令 | 说明 |
-|---|---|
+| 命令 | 作用 |
+| --- | --- |
 | `npm run dev` | 启动 Electron 开发模式 |
-| `npx tsc --noEmit` | TypeScript 类型检查 |
-| `npm test` | 运行单元测试（Vitest） |
-| `npm run test:ci` | 运行 CI 业务测试（排除压力与演示测试） |
-| `npm run test:e2e` | 端到端测试（需先构建） |
-| `npm run build` | 生产构建 |
+| `npm run build` | 构建桌面应用 |
+| `npm run test:ci` | 运行 CI 单元测试 |
+| `npm run test:e2e` | 构建并运行 Electron 端到端测试 |
+| `npm run package:win` | 构建 Windows x64 安装版和 Portable |
+| `npm run package:mac` | 构建 macOS arm64 DMG 和 ZIP |
 | `npm run build:mcp` | 构建 Material Map stdio MCP 服务 |
-| `npm run mcp -- /path/to/workspace` | 为指定工作区启动 MCP 服务 |
-| `npm run package` | 默认构建 Windows 安装包（兼容旧流程） |
-| `npm run package:win` | 构建 Windows x64（Intel/AMD）NSIS + Portable 安装包 |
-| `npm run package:mac` | 构建 macOS arm64（Apple Silicon）DMG + ZIP 安装包 |
+| `npm run check:readme` | 检查 README 本地链接和图片 |
 
-### GitHub Actions 构建与发布
+## 文档和开发
 
-仓库中的 `.github/workflows/windows-package.yml` 会在 `main`、`develop` 或 `feat/develop` 分支有新提交时，分别构建 Windows x64（Intel/AMD）和 macOS arm64（Apple Silicon）产物，并把两组 artifact 上传到对应的 Actions 运行记录中（保留 14 天）。打包和发布是独立步骤，打包不需要配置个人访问令牌。
+完整的产品与技术文档在 [`ai-docs/`](./ai-docs/)：
 
-正式版本使用 `vMAJOR.MINOR.PATCH` 标签。当前稳定版为 `v1.0.0`：
+- [产品 PRD](./ai-docs/01_PRD.md)
+- [技术架构](./ai-docs/02_TDD_技术架构设计.md)
+- [Graph 模型](./ai-docs/03_Graph模型设计.md)
+- [数据库 Schema](./ai-docs/04_数据库Schema设计.md)
+- [AI Pipeline](./ai-docs/05_AI_Pipeline设计.md)
+- [API 接口](./ai-docs/06_API接口设计.md)
+- [UI 交互](./ai-docs/07_UI交互设计.md)
+- [Agent 演进路线](./ai-docs/10_Agent演进路线.md)
 
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
+欢迎通过 [Issues](https://github.com/dongdonglog/Auto-connect-project/issues) 提交问题和建议。涉及功能修改时，请同时补充对应测试，并运行类型检查、单元测试和构建。
 
-标签构建成功后，工作流会自动创建 GitHub Release，并附上 Windows NSIS/Portable、macOS DMG/ZIP 及对应更新元数据。`v1.0.0-alpha.1` 和 `v1.0.0-beta.1` 会先运行测试并标记为预发布；稳定版标签（例如 `v1.0.0`）直接构建和打包，不运行 GitHub Actions 测试。若 Release 创建权限被仓库策略禁止，请在 **Settings → Actions → General → Workflow permissions** 中允许工作流读写仓库内容。
+## 许可证
 
-## 技术栈
-
-| 层 | 技术 |
-|---|---|
-| **桌面框架** | Electron 33+ |
-| **前端** | React 19 + TypeScript |
-| **画布** | @xyflow/react (React Flow) |
-| **布局算法** | @dagrejs/dagre |
-| **数据库** | SQLite + FTS5 全文检索 |
-| **向量检索（可选）** | sqlite-vec |
-| **文件监听** | chokidar |
-| **文档解析** | mammoth (DOCX)、pdf-parse (PDF)、papaparse (CSV) |
-| **Markdown 渲染** | react-markdown + remark-gfm + rehype-highlight |
-| **测试** | Vitest + Playwright |
-| **构建** | electron-vite + electron-builder |
-
-## 架构概览
-
-```
-┌─────────────────────────────────┐
-│  Renderer (React / React Flow)  │
-│  ├─ Workbench    工作台          │
-│  ├─ Explorer     关系探索        │
-│  ├─ Topic Canvas 主题画板        │
-│  └─ Q&A          AI Agent 问答    │
-└────────────┬────────────────────┘
-             │  typed preload IPC
-┌────────────▼────────────────────┐
-│  Main Process                   │
-│  ├─ WorkspaceService            │
-│  │   └─ SQLite · FTS5 · Entity · Relation · Evidence
-│  ├─ AiService                   │
-│  │   └─ 问答 · 单条关系解释     │
-│  ├─ AppStore (模型配置 & 密钥)  │
-│  └─ chokidar (文件夹监听)       │
-└─────────────────────────────────┘
-```
-
-关键模块：
-
-- `src/main/workspace-service.ts` — 工作区、迁移、索引、关系数据主服务
-- `src/main/ai-service.ts` — 带证据问答与单条关系解释
-- `src/shared/topic-topology.ts` — 主进程与画布共用的稳定排序与系统布局
-- `src/renderer/src/features/topics/` — 主题画板与关系交互
-- `src/renderer/src/features/workbench/` — 材料工作台
-- `src/e2e/` — 真实 Electron 进程端到端测试
-
-## 产品原则
-
-1. **本地优先**：原始文件留在用户文件夹，工作区只保存元数据、索引和关系
-2. **无 AI 可用**：索引、检索、关系发现和画板不依赖网络或 API Key
-3. **证据优先**：每条自动关系必须展示材料或段落证据；证据不足明确拒答
-4. **用户优先**：手动关系和手动位置永不被他方覆盖
-5. **可恢复**：工作区可导出、导入和可选加密；失联文件保留快照
-
-## 文档
-
-完整的产品与技术文档见 [`ai-docs/`](./ai-docs/)：
-
-| 文档 | 说明 |
-|---|---|
-| [PRD](./ai-docs/01_PRD.md) | 产品愿景、用户与功能边界 |
-| [技术架构](./ai-docs/02_TDD_技术架构设计.md) | Electron 本地架构与运行时边界 |
-| [Graph 模型](./ai-docs/03_Graph模型设计.md) | Material、Entity、Relation 与 Topic 模型 |
-| [数据库 Schema](./ai-docs/04_数据库Schema设计.md) | SQLite 表、索引、迁移与导入导出 |
-| [AI Pipeline](./ai-docs/05_AI_Pipeline设计.md) | 按需解释、问答与隐私约束 |
-| [API 接口](./ai-docs/06_API接口设计.md) | preload IPC 类型契约 |
-| [UI 交互](./ai-docs/07_UI交互设计.md) | 工作台、Explorer、画板和问答交互 |
-| [MVP 计划](./ai-docs/08_MVP开发计划.md) | 历史 MVP 里程碑、验收与性能目标 |
-
-## 发布路线图
-
-### v1.0.0 正式版（当前）
-
-- [x] 工作区创建、打开、导入导出与加密
-- [x] 材料导入与多格式解析（Markdown/PDF/DOCX/CSV 等）
-- [x] SQLite FTS5 全文检索 + 可选 sqlite-vec 向量增强
-- [x] 显式引用与实体共现关系发现
-- [x] Explorer 三栏探索（材料列表 / 阅读器 / 关联与证据）
-- [x] 主题画板（React Flow + 四边端口 + 手动连线）
-- [x] 可选 AI 解释与 AI Agent 材料问答
-- [x] Agent 按问题选择材料目录、全文检索、关系、主题和画板提案工具
-- [x] 画板对象选择、多选、右键菜单、样式、路径、删除与撤销/重做
-- [x] stdio MCP 服务，支持 CLI 或外部 Agent 访问受限材料工具
-- [x] 文件夹监听增量同步
-- [x] 加密工作区 UI 接入
-- [ ] Windows NSIS/portable 安装包持续验收
-- [ ] 旧组件清理与 `App.tsx` 拆分
-- [ ] 大图性能压测与路由优化
-
-### 未来版本
-
-- 阅读路径自动生成
-- Linux 支持
-- 跨工作区关系查询
-- 受限 Agent 自动补全（需用户确认）
-
-## 贡献指南
-
-欢迎提交 Issue 和 Pull Request！提交前请注意：
-
-1. **不要提交** API Key、工作区数据库、导出包、用户材料、`release/` 或 `out/` 目录
-2. 修改核心服务时补充或更新对应测试
-3. 每项变更至少通过 `npx tsc --noEmit`、`npm test` 和 `npm run build`
-4. 核心流程变更额外执行 `npm run test:e2e`
-5. AI 行为必须有明确的用户触发点、云端同意检查和失败回退
-
-推荐提交格式：
-
-```text
-feat(explorer): add evidence highlight and jump-to-source
-fix(search): retain snapshot citations for unavailable files
-test(workspace): cover encrypted migration fallback
-```
-
-## 数据与隐私
-
-- 所有 SQLite 工作区、解析文本、索引和关系**默认保存在本地**
-- 云端模型**仅在用户启用并明确同意后**接收本次请求必要的文本片段
-- 项目不提供云同步、多人协作或托管后端
-- 建议定期通过工作区导出功能备份数据
-
-## License
-
-[MIT](LICENSE)
-
----
-
-<p align="center">
-  <sub>Built with ❤️ for people who want to understand their materials, not just search them.</sub>
-</p>
+Material Map 使用 [MIT License](./LICENSE)。
