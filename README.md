@@ -121,6 +121,7 @@ npm run dev
 | `npm run dev` | 启动 Electron 开发模式 |
 | `npx tsc --noEmit` | TypeScript 类型检查 |
 | `npm test` | 运行单元测试（Vitest） |
+| `npm run test:ci` | 运行 CI 集成测试（较长超时） |
 | `npm run test:e2e` | 端到端测试（需先构建） |
 | `npm run build` | 生产构建 |
 | `npm run package` | 构建 + 打包 Windows 安装包 |
